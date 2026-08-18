@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "line-harness",
-      "database_id": "REPLACE_WITH_D1_ID"
+      "database_id": "1a091464-53a7-4457-9862-d3a61c3f8bad"
     }
   ]
   // Secrets (never commit values):
