@@ -56,6 +56,78 @@ admin.delete('/auto-replies/:id', async (c) => {
   return c.json({ status: 'deleted' })
 })
 
+// タグ管理
+admin.get('/tags', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.*, COUNT(ft.friend_id) AS friend_count
+     FROM tags t LEFT JOIN friend_tags ft ON t.id = ft.tag_id
+     GROUP BY t.id ORDER BY t.created_at`
+  ).all()
+  return c.json(results)
+})
+
+admin.post('/tags', async (c) => {
+  const b = await c.req.json<{ name: string }>()
+  if (!b.name) return c.json({ error: 'name required' }, 400)
+  const id = newId()
+  try {
+    await c.env.DB.prepare('INSERT INTO tags (id, name) VALUES (?, ?)').bind(id, b.name).run()
+  } catch {
+    return c.json({ error: 'duplicate name' }, 409)
+  }
+  return c.json({ id }, 201)
+})
+
+admin.delete('/tags/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM tags WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ status: 'deleted' })
+})
+
+admin.post('/friends/:friendId/tags', async (c) => {
+  const b = await c.req.json<{ tag_id: string }>()
+  if (!b.tag_id) return c.json({ error: 'tag_id required' }, 400)
+  await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO friend_tags (friend_id, tag_id) VALUES (?, ?)'
+  ).bind(c.req.param('friendId'), b.tag_id).run()
+  return c.json({ status: 'ok' })
+})
+
+admin.delete('/friends/:friendId/tags/:tagId', async (c) => {
+  await c.env.DB.prepare('DELETE FROM friend_tags WHERE friend_id = ? AND tag_id = ?')
+    .bind(c.req.param('friendId'), c.req.param('tagId')).run()
+  return c.json({ status: 'deleted' })
+})
+
+// 友だちごとのタグ
+admin.get('/friends/:friendId/tags', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.id, t.name FROM tags t JOIN friend_tags ft ON t.id = ft.tag_id WHERE ft.friend_id = ?`
+  ).bind(c.req.param('friendId')).all()
+  return c.json(results)
+})
+
+// 配信履歴
+admin.get('/broadcasts', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM broadcasts ORDER BY created_at DESC LIMIT 100'
+  ).all()
+  return c.json(results)
+})
+
+// 配信対象人数プレビュー（送信前確認用）
+admin.get('/broadcasts/targets', async (c) => {
+  const tagId = c.req.query('tag_id')
+  const stmt = tagId
+    ? c.env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM friends f
+         JOIN friend_tags ft ON f.id = ft.friend_id
+         WHERE ft.tag_id = ? AND f.is_following = 1`
+      ).bind(tagId)
+    : c.env.DB.prepare('SELECT COUNT(*) AS count FROM friends WHERE is_following = 1')
+  const row = await stmt.first<{ count: number }>()
+  return c.json({ count: row?.count ?? 0 })
+})
+
 // 一斉配信（tag_id指定でタグ絞り込み、省略で全フォロワー）
 admin.post('/broadcasts', async (c) => {
   const b = await c.req.json<{ title?: string; message_text: string; tag_id?: string }>()
