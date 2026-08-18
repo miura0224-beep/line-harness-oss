@@ -1,4 +1,0 @@
-# Copy to .dev.vars for local development (.dev.vars is gitignored)
-LINE_CHANNEL_SECRET=
-LINE_CHANNEL_ACCESS_TOKEN=
-ADMIN_API_KEY=

@@ -1,21 +1,30 @@
 {
-  "name": "line-harness-oss",
-  "version": "0.1.0",
-  "description": "LINE Messaging API harness on Cloudflare Workers + D1",
-  "type": "module",
+  "name": "line-oss-crm",
+  "version": "0.21.3",
+  "private": true,
+  "description": "Open-source LINE Official Account CRM/marketing automation",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:migrate:local": "wrangler d1 migrations apply line-harness --local",
-    "db:migrate:prod": "wrangler d1 migrations apply line-harness --remote",
-    "cf-typegen": "wrangler types"
+    "dev:worker": "pnpm --filter worker dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm -r build",
+    "deploy:worker": "pnpm --filter worker deploy",
+    "deploy:web": "pnpm --filter web build",
+    "db:migrate": "wrangler d1 execute your-database --file=packages/db/schema.sql",
+    "db:migrate:local": "wrangler d1 execute your-database --file=packages/db/schema.sql --local",
+    "deploy:setup": "node packages/create-line-harness/dist/index.js",
+    "deploy:update": "node packages/create-line-harness/dist/index.js update",
+    "sandbox:create-line-harness": "bash scripts/run-create-line-harness-sandbox.sh",
+    "test:scripts": "vitest run --config vitest.config.ts",
+    "build:bundle": "tsx scripts/release/build-bundle.ts"
   },
-  "dependencies": {
-    "hono": "^4.12.7"
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260811.1",
-    "typescript": "^5.6.0",
-    "wrangler": "^4.4.0"
+    "typescript": "^5.9.3",
+    "wrangler": "4",
+    "tsx": "^4.21.0",
+    "vitest": "^2.1.0"
   }
 }
