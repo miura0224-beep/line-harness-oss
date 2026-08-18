@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "line-harness",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "line-harness",
+      "database_id": "REPLACE_WITH_D1_ID"
+    }
+  ]
+  // Secrets (never commit values):
+  //   npx wrangler secret put LINE_CHANNEL_SECRET
+  //   npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+  //   npx wrangler secret put ADMIN_API_KEY
+}
