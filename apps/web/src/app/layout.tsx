@@ -1,10 +1,13 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import './globals.css'
 import AppShell from '@/components/app-shell'
+
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#064e3b' }
 
 export const metadata: Metadata = {
   title: 'L Harness',
   description: 'L Harness 管理画面',
+  appleWebApp: { capable: true, title: 'LINE Harness', statusBarStyle: 'default' },
 }
 
 export default function RootLayout({

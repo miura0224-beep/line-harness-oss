@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api } from '@/lib/api'
 import type { FriendListItem } from '@/lib/api'
@@ -35,6 +35,7 @@ type ResponseFilter = 'all' | 'unhandled'
 
 export default function FriendsPage() {
   const { selectedAccountId } = useAccount()
+  const requestVersion = useRef(0)
   const [friends, setFriends] = useState<FriendListItem[]>([])
   const [allTags, setAllTags] = useState<Tag[]>([])
   const [total, setTotal] = useState(0)
@@ -58,6 +59,8 @@ export default function FriendsPage() {
   }, [])
 
   const loadFriends = useCallback(async () => {
+    if (!selectedAccountId) return
+    const version = ++requestVersion.current
     setLoading(true)
     setError('')
     try {
@@ -71,6 +74,7 @@ export default function FriendsPage() {
         sort: sortMode,
         handled: responseFilter === 'unhandled' ? 'unhandled' : undefined,
       })
+      if (version !== requestVersion.current) return
       if (res.success) {
         setFriends(res.data.items)
         setTotal(res.data.total)
@@ -79,9 +83,10 @@ export default function FriendsPage() {
         setError(res.error)
       }
     } catch {
+      if (version !== requestVersion.current) return
       setError('友だちの読み込みに失敗しました。もう一度お試しください。')
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
   }, [page, selectedTagId, selectedAccountId, searchSubmitted, sortMode, responseFilter])
 

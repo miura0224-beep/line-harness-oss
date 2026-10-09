@@ -14,6 +14,8 @@ export interface ImageUploaderProps {
   value: ImageUploaderValue | null
   onChange: (next: ImageUploaderValue | null) => void
   label?: string
+  /** チャット画面向け: ラベルとD&D枠を省いてボタンだけ表示する */
+  compact?: boolean
 }
 
 /**
@@ -23,7 +25,7 @@ export interface ImageUploaderProps {
  * mode='line-image' は {originalContentUrl, previewImageUrl} を返す (Broadcast / Auto-reply / Template / Chats)。
  * 初版は preview = original の同 URL。後段で本格 resize が必要になれば worker 側で対応。
  */
-export default function ImageUploader({ mode, value, onChange, label }: ImageUploaderProps) {
+export default function ImageUploader({ mode, value, onChange, label, compact }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -103,9 +105,9 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
         : value.previewImageUrl
 
   return (
-    <div className="space-y-2">
-      {label && <div className="text-sm font-medium text-gray-700">{label}</div>}
-      <div className="flex justify-end">
+    <div className={compact ? '' : 'space-y-2'}>
+      {label && !compact && <div className="text-sm font-medium text-gray-700">{label}</div>}
+      <div className={compact ? 'hidden' : 'flex justify-end'}>
         <button
           type="button"
           onClick={() => setManualUrlMode((v) => !v)}
@@ -145,7 +147,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
           onDrop={onDrop}
           onPaste={onPaste}
           tabIndex={0}
-          className="rounded-lg border-2 border-dashed border-gray-300 bg-white p-4 transition-colors hover:border-gray-400 focus:border-emerald-500 focus:outline-none"
+          className={`rounded-lg bg-white transition-colors focus:outline-none ${compact ? 'p-0' : 'border-2 border-dashed border-gray-300 p-4 hover:border-gray-400 focus:border-emerald-500'}`}
         >
           {previewUrl ? (
             <div className="flex items-center gap-3">
@@ -169,7 +171,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2 py-4 text-sm text-gray-500">
+            <div className={compact ? 'flex items-center gap-2 text-sm text-gray-500' : 'flex flex-col items-center gap-2 py-4 text-sm text-gray-500'}>
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
@@ -178,7 +180,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
               >
                 {busy ? 'アップロード中…' : '📎 画像を選択'}
               </button>
-              <div className="text-xs text-gray-400">またはドラッグ&ドロップ / Cmd+V でペースト</div>
+              {!compact && <div className="text-xs text-gray-400">またはドラッグ&ドロップ / Cmd+V でペースト</div>}
             </div>
           )}
           <input

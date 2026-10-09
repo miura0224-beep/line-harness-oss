@@ -118,16 +118,16 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                       {friend.pictureUrl ? (
                         <img
                           src={friend.pictureUrl}
-                          alt={friend.displayName}
+                          alt={((((friend as unknown as { metadata?: Record<string, unknown> }).metadata?.customName as string) || friend.displayName))}
                           className="w-9 h-9 rounded-full object-cover bg-gray-100"
                         />
                       ) : (
                         <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-sm font-medium">
-                          {friend.displayName?.charAt(0) ?? '?'}
+                          {(((((friend as unknown as { metadata?: Record<string, unknown> }).metadata?.customName as string) || friend.displayName)) || '?').charAt(0)}
                         </div>
                       )}
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{friend.displayName}</p>
+                        <p className="text-sm font-medium text-gray-900">{((((friend as unknown as { metadata?: Record<string, unknown> }).metadata?.customName as string) || friend.displayName))}</p>
                         {friend.statusMessage && (
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}

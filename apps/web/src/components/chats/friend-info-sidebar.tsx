@@ -33,6 +33,8 @@ interface Props {
   chatStatus?: ChatStatusInfo
   /** 担当者名 (ChatDetail で operatorId → name 変換済を渡す想定) */
   operatorName?: string | null
+  /** 管理用の名前を変えたとき、親（チャット一覧など）の表示も更新する */
+  onRenamed?: (friendId: string, customName: string) => void
 }
 
 function formatDate(iso: string | null): string {
@@ -59,8 +61,12 @@ function renderValue(value: unknown): string {
   }
 }
 
-export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }: Props) {
+export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, onRenamed }: Props) {
   const [friend, setFriend] = useState<FriendDetail | null>(null)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [savingName, setSavingName] = useState(false)
+  const [nameError, setNameError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   type MileageState =
@@ -145,7 +151,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
   if (!friendId) return null
 
   return (
-    <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
+    <div className="chat-profile w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
         <h3 className="text-sm font-semibold text-gray-700">友だち詳細</h3>
       </div>
@@ -162,7 +168,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             </div>
           </div>
         ) : error ? (
-          <div className="p-4 text-xs text-red-600">{error}</div>
+          <div className="p-4 text-sm text-red-600">{error}</div>
         ) : friend ? (
           <div className="divide-y divide-gray-100">
             {/* Profile Header */}
@@ -175,61 +181,59 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-gray-900 truncate">{friend.displayName || '名前なし'}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
+                {editingName ? (
+                  <div className="space-y-1.5">
+                    <input
+                      autoFocus
+                      value={nameDraft}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') setEditingName(false) }}
+                      placeholder={friend.displayName || '名前'}
+                      className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                    />
+                    <div className="flex gap-1.5">
+                      <button
+                        disabled={savingName}
+                        onClick={async () => {
+                          setSavingName(true); setNameError('')
+                          try {
+                            const v = nameDraft.trim()
+                            await api.friends.setMetadata(friend.id, { customName: v })
+                            setFriend({ ...friend, metadata: { ...(friend.metadata || {}), customName: v } })
+                            onRenamed?.(friend.id, v)
+                            setEditingName(false)
+                          } catch { setNameError('保存できませんでした') } finally { setSavingName(false) }
+                        }}
+                        className="rounded bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white disabled:opacity-50"
+                      >{savingName ? '保存中' : '保存'}</button>
+                      <button onClick={() => setEditingName(false)} className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600">やめる</button>
+                    </div>
+                    {nameError && <p className="text-xs text-red-600">{nameError}</p>}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{(friend.metadata?.customName as string) || friend.displayName || '名前なし'}</p>
+                      <button
+                        onClick={() => { setNameDraft(((friend.metadata?.customName as string) || '')); setEditingName(true) }}
+                        className="shrink-0 rounded px-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                        aria-label="名前を変更"
+                      >✏️ 変更</button>
+                    </div>
+                    {!!(friend.metadata?.customName as string) && (
+                      <p className="text-xs text-gray-500 truncate">LINEの名前: {friend.displayName || '—'}</p>
+                    )}
+                  </>
+                )}
+                <p className="text-sm text-slate-600 mt-0.5">
                   登録日: {formatDate(friend.createdAt)}
                 </p>
                 {!friend.isFollowing && (
-                  <span className="inline-block mt-1 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                  <span className="inline-block mt-1 px-1.5 py-0 rounded text-sm font-medium bg-gray-100 text-gray-500">
                     ブロック済
                   </span>
                 )}
               </div>
-            </div>
-
-            {/* Harness Mileage — canonical user identity across LINE accounts */}
-            <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-2">マイル</h4>
-              {mileage.kind === 'loading' ? (
-                <div className="h-24 animate-pulse rounded-xl bg-gray-100" />
-              ) : mileage.kind === 'error' ? (
-                <p className="text-[11px] text-red-500 italic">マイルの取得に失敗しました</p>
-              ) : (
-                <div className="overflow-hidden rounded-xl bg-gradient-to-br from-gray-900 via-gray-700 to-amber-800 p-3.5 text-white shadow-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-[10px] font-semibold text-white/70">{mileage.summary.programName}</p>
-                      <p className="mt-0.5 text-2xl font-bold tabular-nums">
-                        {mileage.summary.available.toLocaleString('ja-JP')}
-                        <span className="ml-1 text-[11px] font-semibold text-white/70">mile</span>
-                      </p>
-                      <p className="text-[10px] text-white/60">利用可能</p>
-                    </div>
-                    {mileage.summary.pending > 0 && (
-                      <span className="rounded-full bg-white/15 px-2 py-1 text-[10px] font-medium">
-                        確定待ち {mileage.summary.pending.toLocaleString('ja-JP')}
-                      </span>
-                    )}
-                  </div>
-
-                  {mileage.history.length > 0 ? (
-                    <div className="mt-3 space-y-1.5 border-t border-white/15 pt-2.5">
-                      {mileage.history.slice(0, 3).map((item) => (
-                        <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
-                          <span className="min-w-0 truncate text-white/75">{item.reason}</span>
-                          <span className={`shrink-0 font-semibold tabular-nums ${item.amount > 0 ? 'text-amber-200' : 'text-white/80'}`}>
-                            {item.amount > 0 ? '+' : ''}{item.amount.toLocaleString('ja-JP')}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 border-t border-white/15 pt-2.5 text-[10px] text-white/50">
-                      まだマイル履歴はありません
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Status / Operator */}
@@ -237,16 +241,16 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               <div className="p-4 space-y-2">
                 {chatStatus?.status && statusLabels[chatStatus.status] && (
                   <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">対応状況</span>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusLabels[chatStatus.status].className}`}>
+                    <span className="text-sm text-gray-500">対応状況</span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium ${statusLabels[chatStatus.status].className}`}>
                       {statusLabels[chatStatus.status].label}
                     </span>
                   </div>
                 )}
                 {operatorName && (
                   <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">担当者</span>
-                    <span className="text-xs text-gray-700">{operatorName}</span>
+                    <span className="text-sm text-gray-500">担当者</span>
+                    <span className="text-sm text-gray-700">{operatorName}</span>
                   </div>
                 )}
               </div>
@@ -255,22 +259,22 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             {/* Notes */}
             {chatStatus?.notes && (
               <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">個別メモ</h4>
-                <p className="text-xs text-gray-700 whitespace-pre-wrap break-words">{chatStatus.notes}</p>
+                <h4 className="text-sm font-medium text-gray-500 mb-1.5">個別メモ</h4>
+                <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{chatStatus.notes}</p>
               </div>
             )}
 
             {/* Tags */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">タグ</h4>
+              <h4 className="text-sm font-medium text-gray-500 mb-1.5">タグ</h4>
               {friend.tags.length === 0 ? (
-                <p className="text-[11px] text-gray-400 italic">タグなし</p>
+                <p className="text-sm text-slate-600 italic">タグなし</p>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {friend.tags.map((tag) => (
                     <span
                       key={tag.id}
-                      className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
+                      className="inline-flex items-center px-2 py-0.5 rounded text-sm font-medium"
                       style={{
                         backgroundColor: `${tag.color}20`,
                         color: tag.color,
@@ -285,18 +289,18 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
 
             {/* Rich Menu */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">リッチメニュー</h4>
+              <h4 className="text-sm font-medium text-gray-500 mb-1.5">リッチメニュー</h4>
               {richMenu.kind === 'loading' ? (
-                <p className="text-[11px] text-gray-400 italic">読み込み中...</p>
+                <p className="text-sm text-slate-600 italic">読み込み中...</p>
               ) : richMenu.kind === 'error' ? (
-                <p className="text-[11px] text-red-500 italic">取得に失敗しました</p>
+                <p className="text-sm text-red-500 italic">取得に失敗しました</p>
               ) : richMenu.id === null ? (
-                <p className="text-[11px] text-gray-400 italic">未設定</p>
+                <p className="text-sm text-slate-600 italic">未設定</p>
               ) : (
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-700">{richMenu.name ?? '(名前なし)'}</span>
+                  <span className="text-sm text-gray-700">{richMenu.name ?? '(名前なし)'}</span>
                   {richMenu.isDefault && (
-                    <span className="px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                    <span className="px-1.5 py-0 rounded text-sm font-medium bg-gray-100 text-gray-500">
                       デフォルト
                     </span>
                   )}
@@ -307,11 +311,11 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             {/* Metadata custom fields */}
             {friend.metadata && Object.keys(friend.metadata).length > 0 && (
               <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-2">友だち情報</h4>
-                <dl className="space-y-2 text-xs">
-                  {Object.entries(friend.metadata).map(([key, value]) => (
+                <h4 className="text-sm font-medium text-gray-500 mb-2">友だち情報</h4>
+                <dl className="space-y-2 text-sm">
+                  {Object.entries(friend.metadata).filter(([key]) => key !== 'customName').map(([key, value]) => (
                     <div key={key}>
-                      <dt className="text-[10px] text-gray-400 uppercase tracking-wide">{key}</dt>
+                      <dt className="text-sm text-slate-600 uppercase tracking-wide">{key}</dt>
                       <dd className="text-gray-700 mt-0.5 whitespace-pre-wrap break-words">{renderValue(value)}</dd>
                     </div>
                   ))}
@@ -322,7 +326,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             {/* Form answers — save_to_metadata の設定に関係なく回答履歴を表示 */}
             {friend.formSubmissions?.length > 0 && (
               <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-2">フォーム回答</h4>
+                <h4 className="text-sm font-medium text-gray-500 mb-2">フォーム回答</h4>
                 <div className="space-y-3">
                   {friend.formSubmissions.map((submission) => {
                     const labels = new Map(submission.fields.map((field) => [field.name, field.label]))
@@ -330,16 +334,16 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                     return (
                       <div key={submission.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                         <div className="flex items-start justify-between gap-2">
-                          <p className="text-xs font-medium text-gray-700 break-words">{submission.formName}</p>
-                          <time className="shrink-0 text-[10px] text-gray-400">
+                          <p className="text-sm font-medium text-gray-700 break-words">{submission.formName}</p>
+                          <time className="shrink-0 text-sm text-slate-600">
                             {formatDate(submission.createdAt)}
                           </time>
                         </div>
                         <dl className="mt-2 space-y-2">
                           {answers.map(([key, value]) => (
                             <div key={key}>
-                              <dt className="text-[10px] text-gray-400">{labels.get(key) ?? key}</dt>
-                              <dd className="mt-0.5 whitespace-pre-wrap break-words text-xs text-gray-700">
+                              <dt className="text-sm text-slate-600">{labels.get(key) ?? key}</dt>
+                              <dd className="mt-0.5 whitespace-pre-wrap break-words text-sm text-gray-700">
                                 {renderValue(value)}
                               </dd>
                             </div>
@@ -359,7 +363,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             */}
           </div>
         ) : (
-          <div className="p-4 text-xs text-gray-400">友だち情報がありません</div>
+          <div className="p-4 text-sm text-slate-600">友だち情報がありません</div>
         )}
       </div>
     </div>

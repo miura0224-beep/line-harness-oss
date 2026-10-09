@@ -30,19 +30,27 @@ export default function LoginPage() {
       })
 
       if (res.ok) {
-        localStorage.removeItem('lh_api_key')
+        // Confirm that the browser actually retained the session before leaving
+        // login; otherwise Safari can silently loop between here and AuthGuard.
+        const session = await fetch(`${apiUrl}/api/auth/session`, {
+          credentials: 'include', cache: 'no-store',
+        })
+        if (!session.ok) {
+          setError('ログイン状態を保存できませんでした。このページを再読み込みしてから、もう一度お試しください。')
+          return
+        }
+        const loginData = await session.json()
+        if (!loginData.success || !loginData.data) {
+          setError('ログイン状態を確認できませんでした。もう一度お試しください。')
+          return
+        }
         try {
-          const loginData = await res.json()
-          if (loginData.success && loginData.data) {
-            localStorage.setItem('lh_staff_name', loginData.data.name)
-            localStorage.setItem('lh_staff_role', loginData.data.role)
-          }
-          // Cache the CSRF token for mutating requests (double-submit).
-          if (loginData.csrfToken) {
-            localStorage.setItem('lh_csrf', loginData.csrfToken)
-          }
+          localStorage.removeItem('lh_api_key')
+          localStorage.setItem('lh_staff_name', loginData.data.name)
+          localStorage.setItem('lh_staff_role', loginData.data.role)
+          if (loginData.csrfToken) localStorage.setItem('lh_csrf', loginData.csrfToken)
         } catch {
-          // Profile / CSRF caching is best-effort.
+          // Browser storage restrictions must not invalidate a valid cookie session.
         }
         router.push('/')
       } else if (res.status === 401) {
@@ -78,9 +86,13 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin}>
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+            <label htmlFor="api-key" className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
             <input
+              id="api-key"
               type="password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="APIキーを入力"

@@ -102,3 +102,44 @@ images.delete('/api/images/:key', async (c) => {
 });
 
 export { images };
+
+// PDFはLINEで開ける推測困難なURLとして送付。アップロードは通常のAPI認証を通す。
+images.post('/api/files', async (c) => {
+  if ((c.req.header('Content-Type') || '').split(';')[0] !== 'application/pdf') {
+    return c.json({ success: false, error: 'PDFのみ添付できます' }, 415);
+  }
+  const limit = 10 * 1024 * 1024;
+  if (Number(c.req.header('Content-Length')) > limit) return c.json({ success: false, error: 'PDFは10MB以下にしてください' }, 413);
+  const reader = c.req.raw.body?.getReader();
+  if (!reader) return c.json({ success: false, error: 'PDFが空です' }, 400);
+  const chunks: Uint8Array[] = []; let size = 0;
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break;
+    size += value.byteLength;
+    if (size > limit) { await reader.cancel(); return c.json({ success: false, error: 'PDFは10MB以下にしてください' }, 413); }
+    chunks.push(value);
+  }
+  const data = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+  if (new TextDecoder().decode(data.subarray(0, 5)) !== '%PDF-') return c.json({ success: false, error: 'PDF形式を確認できませんでした' }, 400);
+  const key = `documents/${crypto.randomUUID()}.pdf`;
+  await c.env.IMAGES.put(key, data, { httpMetadata: { contentType: 'application/pdf' } });
+  const origin = c.env.WORKER_URL || new URL(c.req.url).origin;
+  return c.json({ success: true, data: { key, url: `${origin}/files/${key.slice(10)}`, size } }, 201);
+});
+images.get('/files/:key', async (c) => {
+  const key = c.req.param('key');
+  if (!/^[0-9a-f-]{36}\.pdf$/.test(key)) return c.notFound();
+  const object = await c.env.IMAGES.get(`documents/${key}`);
+  if (!object) return c.notFound();
+  return new Response(object.body, { headers: {
+    'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="document.pdf"',
+    'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex, nofollow',
+    'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer',
+  } });
+});
+images.delete('/api/files/:key', async (c) => {
+  const key = c.req.param('key'); if (!/^[0-9a-f-]{36}\.pdf$/.test(key)) return c.notFound();
+  await c.env.IMAGES.delete(`documents/${key}`);
+  return c.json({ success: true });
+});

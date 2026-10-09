@@ -29,7 +29,7 @@ interface AccountContextValue {
   accounts: AccountWithStats[]
   selectedAccountId: string | null
   selectedAccount: AccountWithStats | null
-  setSelectedAccountId: (id: string) => void
+  setSelectedAccountId: (id: string, options?: { preserveChat?: boolean }) => void
   refreshAccounts: () => Promise<void>
   loading: boolean
 }
@@ -41,7 +41,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const [selectedAccountId, setSelectedAccountIdState] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const setSelectedAccountId = useCallback((id: string) => {
+  const setSelectedAccountId = useCallback((id: string, options?: { preserveChat?: boolean }) => {
+    if (!options?.preserveChat && typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('friend')
+      window.history.replaceState(null, '', url)
+    }
     setSelectedAccountIdState(id)
     try {
       localStorage.setItem(STORAGE_KEY, id)

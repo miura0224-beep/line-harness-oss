@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
 import { api, fetchApi } from '@/lib/api'
 import { UNANSWERED_REFRESH_EVENT } from '@/lib/events'
@@ -9,6 +9,7 @@ import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
 import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
+import PdfAttachment, { pdfMessage } from '@/components/chats/pdf-attachment'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
 
 interface Chat {
@@ -36,6 +37,7 @@ interface ChatMessage {
 }
 
 interface ChatDetail extends Chat {
+  lineAccountId?: string | null
   friendName: string
   friendPictureUrl: string | null
   messages?: ChatMessage[]
@@ -140,6 +142,12 @@ interface MessageLog {
   createdAt: string
 }
 
+function MessageText({ text }: { text: string }) {
+  return <>{text.split(/(https?:\/\/[^\s<>「」]+?)(?=[\s<>「」]|$)/g).map((part, i) =>
+    /^https?:\/\//.test(part) ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline [overflow-wrap:anywhere]">{part}</a> : part
+  )}</>
+}
+
 function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   friendId: string
   friend: FriendItem | null
@@ -147,6 +155,8 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   onSent: () => void
 }) {
   const [message, setMessage] = useState('')
+  const [pdf, setPdf] = useState<File | null>(null)
+  const [sendError, setSendError] = useState('')
   const [sending, setSending] = useState(false)
   const [messages, setMessages] = useState<MessageLog[]>([])
   const [loadingMessages, setLoadingMessages] = useState(true)
@@ -168,29 +178,33 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   }, [friendId])
 
   const handleSend = async () => {
-    if (!message.trim() || sending || sendLockRef.current) return
+    if ((!message.trim() && !pdf) || sending || sendLockRef.current) return
     sendLockRef.current = true
     setSending(true)
     try {
+      setSendError('')
+      const content = pdf ? await pdfMessage(pdf, message) : message
       await fetchApi(`/api/friends/${friendId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content: message, messageType: 'text' }),
+        headers: { 'X-Line-Harness-Source': 'manual' },
+        body: JSON.stringify({ content, messageType: 'text' }),
       })
       setMessages((prev) => [...prev, {
         id: crypto.randomUUID(),
         direction: 'outgoing',
         messageType: 'text',
-        content: message,
+        content,
         createdAt: new Date().toISOString(),
       }])
       setMessage('')
-    } catch { /* silent */ }
+      setPdf(null)
+    } catch { setSendError('送信できませんでした。添付と本文を確認して再度お試しください。') }
     setSending(false)
     sendLockRef.current = false
   }
 
   function renderContent(msg: MessageLog) {
-    if (msg.messageType === 'text') return msg.content
+    if (msg.messageType === 'text') return <MessageText text={msg.content} />
     if (msg.messageType === 'flex') {
       try {
         const parsed = JSON.parse(msg.content)
@@ -231,11 +245,11 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
           <img src={friend.pictureUrl} alt="" className="w-8 h-8 rounded-full" />
         ) : (
           <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-            <span className="text-gray-500 text-xs">{(friend?.displayName || '?').charAt(0)}</span>
+            <span className="text-gray-500 text-xs">{(((friend as unknown as { metadata?: Record<string, unknown> } | null)?.metadata?.customName as string) || friend?.displayName || '?').charAt(0)}</span>
           </div>
         )}
         <div>
-          <p className="text-sm font-bold text-gray-900">{friend?.displayName || '不明'}</p>
+          <p className="text-sm font-bold text-gray-900">{((friend as unknown as { metadata?: Record<string, unknown> } | null)?.metadata?.customName as string) || friend?.displayName || '不明'}</p>
           <p className="text-xs text-gray-400">メッセージ履歴</p>
         </div>
       </div>
@@ -261,8 +275,10 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
           ))
         )}
       </div>
-      <div className="px-4 py-3 border-t border-gray-200">
-        <div className="flex gap-2">
+      <div className="chat-composer px-4 py-3 border-t border-gray-200">
+        <PdfAttachment value={pdf} onChange={setPdf} disabled={sending} />
+        {sendError && <p role="alert" className="text-red-700">{sendError}</p>}
+        <div className="flex gap-2 mt-2">
           <input
             type="text"
             value={message}
@@ -272,7 +288,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
             onKeyDown={(e) => {
               // IME変換確定のEnterでは送信しない
               if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) return
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (!window.matchMedia('(pointer: coarse)').matches && e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 handleSend()
               }
@@ -282,7 +298,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
           />
           <button
             onClick={handleSend}
-            disabled={!message.trim() || sending}
+            disabled={(!message.trim() && !pdf) || sending}
             className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50"
             style={{ backgroundColor: '#06C755' }}
           >
@@ -295,13 +311,30 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
 }
 
 export default function ChatsPage() {
-  const { selectedAccountId } = useAccount()
+  const { selectedAccountId, setSelectedAccountId } = useAccount()
+  const detailRequest = useRef(0)
   const [chats, setChats] = useState<Chat[]>([])
   const [allFriends, setAllFriends] = useState<FriendItem[]>([])
+  // 管理用の名前（metadata.customName）。LINEの登録名は毎回上書きされるため、表示はこちらを優先する
+  const customNames = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const f of allFriends) {
+      const n = (f as unknown as { metadata?: Record<string, unknown> }).metadata?.customName
+      if (typeof n === 'string' && n.trim()) m.set(f.id, n.trim())
+    }
+    return m
+  }, [allFriends])
+  const nameOf = (friendId: string | null | undefined, fallback: string) => (friendId && customNames.get(friendId)) || fallback
+  const handleRenamed = (friendId: string, name: string) =>
+    setAllFriends((fs) => fs.map((f) => (f.id === friendId ? ({ ...f, metadata: { ...((f as unknown as { metadata?: Record<string, unknown> }).metadata || {}), customName: name } } as FriendItem) : f)))
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    if (typeof window === 'undefined') return 'all'
+    const status = new URLSearchParams(window.location.search).get('status')
+    return status === 'unread' || status === 'in_progress' || status === 'resolved' ? status : 'all'
+  })
   const statusFilterRef = useRef<StatusFilter>('all')
   const unansweredOnlyRef = useRef(false)
   const [unansweredOnly, setUnansweredOnly] = useState(() => {
@@ -328,6 +361,8 @@ export default function ChatsPage() {
   const [error, setError] = useState('')
   const [messageContent, setMessageContent] = useState('')
   const [pendingImage, setPendingImage] = useState<ImageUploaderValue | null>(null)
+  const [pendingPdf, setPendingPdf] = useState<File | null>(null)
+  useEffect(() => { setPendingPdf(null) }, [selectedChatId])
   const [sending, setSending] = useState(false)
   const sendLockRef = useRef(false)
   const [notes, setNotes] = useState('')
@@ -462,11 +497,22 @@ export default function ChatsPage() {
   }, [sendMode])
 
   const loadChatDetail = useCallback(async (chatId: string) => {
+    const requestId = ++detailRequest.current
+    setChatDetail(null)
     setDetailLoading(true)
     setError('')
     try {
       const res = await api.chats.get(chatId)
+      if (requestId !== detailRequest.current) return
       if (res.success) {
+        const detail = res.data as unknown as ChatDetail
+        if (detail.lineAccountId && detail.lineAccountId !== selectedAccountId) {
+          const url = new URL(window.location.href)
+          url.searchParams.set('friend', chatId)
+          window.history.replaceState(null, '', url)
+          setSelectedAccountId(detail.lineAccountId, { preserveChat: true })
+          return
+        }
         setChatDetail(res.data as unknown as ChatDetail)
         setNotes((res.data as unknown as ChatDetail).notes || '')
       } else {
@@ -475,13 +521,14 @@ export default function ChatsPage() {
         setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
       }
     } catch (err) {
+      if (requestId !== detailRequest.current) return
       // ネットワーク / parse / auth fail などの例外。empty catch だと原因不明だったので詳細を出す。
       const msg = err instanceof Error ? err.message : String(err)
       setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
     } finally {
-      setDetailLoading(false)
+      if (requestId === detailRequest.current) setDetailLoading(false)
     }
-  }, [])
+  }, [selectedAccountId, setSelectedAccountId])
 
   useEffect(() => {
     loadChats()
@@ -514,7 +561,7 @@ export default function ChatsPage() {
   // does not include it. Returning `prev` unchanged when already present
   // avoids any update loop.
   useEffect(() => {
-    if (!chatDetail) return
+    if (!chatDetail || chatDetail.lineAccountId !== selectedAccountId) return
     setChats((prev) => {
       if (prev.some((c) => c.id === chatDetail.id)) return prev
       // /api/chats/:id may not populate the lastMessage* fields; derive
@@ -538,7 +585,7 @@ export default function ChatsPage() {
       }
       return [entry, ...prev]
     })
-  }, [chatDetail, chats])
+  }, [chatDetail, chats, selectedAccountId])
 
   // 詳細が新しくロードされたら最下部（＝最新メッセージ）までスクロールする。
   // そこから上にスクロールすれば過去のメッセージを辿れる（LINE受信画面と同じUX）。
@@ -578,9 +625,12 @@ export default function ChatsPage() {
   }, [messageContent])
 
   const handleSelectChat = (chatId: string) => {
+    ++detailRequest.current
+    setChatDetail(null)
     setSelectedChatId(chatId)
     setMessageContent('')
     setPendingImage(null)
+    setPendingPdf(null)
   }
 
   const triggerLoadingAnimation = useCallback(async (chatId: string) => {
@@ -604,7 +654,7 @@ export default function ChatsPage() {
 
   const handleSendMessage = async () => {
     if (!selectedChatId || sending || sendLockRef.current) return
-    if (!messageContent.trim() && !pendingImage) return
+    if (!messageContent.trim() && !pendingImage && !pendingPdf) return
     const sendingChatId = selectedChatId  // capture the chat id for this send
     sendLockRef.current = true
     setSending(true)
@@ -664,10 +714,11 @@ export default function ChatsPage() {
         })
       }
       // --- Text send path (runs independently — both paths execute when both image and text are present) ---
-      if (messageContent.trim()) {
-        const content = messageContent.trim()
+      if (messageContent.trim() || pendingPdf) {
+        const content = pendingPdf ? await pdfMessage(pendingPdf, messageContent) : messageContent.trim()
         await api.chats.send(sendingChatId, { content })
         setMessageContent('')
+        setPendingPdf(null)
         // Optimistic update: append message locally instead of refetching (prevents scroll jump / full reload feel)
         // Only mutate chatDetail if it still corresponds to the chat we just sent to
         setChatDetail((prev) => (prev && prev.id === sendingChatId) ? {
@@ -757,7 +808,7 @@ export default function ChatsPage() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     // IME変換確定のEnterでは送信しない
     if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) return
-    if (e.key !== 'Enter') return
+    if (e.key !== 'Enter' || window.matchMedia('(pointer: coarse)').matches) return
     // sendMode 'enter': Enter単体で送信、Shift+Enterは改行
     // sendMode 'shift-enter': Shift+Enterで送信、Enter単体は改行
     const shouldSend = sendMode === 'enter' ? !e.shiftKey : e.shiftKey
@@ -767,9 +818,28 @@ export default function ChatsPage() {
     }
   }
 
+  const chatOpen = !!(selectedChatId || selectedFriendId)
+  useEffect(() => {
+    // スマホで会話を開いている間だけ全画面（CSS側で上下メニューを畳む）
+    document.body.classList.toggle('chat-fullscreen', chatOpen)
+    const viewport = window.visualViewport
+    const resize = () => {
+      document.documentElement.style.setProperty('--chat-height', `${viewport?.height ?? window.innerHeight}px`)
+      document.documentElement.style.setProperty('--chat-top', `${viewport?.offsetTop ?? 0}px`)
+    }
+    resize(); viewport?.addEventListener('resize', resize); viewport?.addEventListener('scroll', resize)
+    return () => {
+      document.body.classList.remove('chat-fullscreen')
+      viewport?.removeEventListener('resize', resize); viewport?.removeEventListener('scroll', resize)
+      document.documentElement.style.removeProperty('--chat-height'); document.documentElement.style.removeProperty('--chat-top')
+    }
+  }, [chatOpen])
+
   return (
     <div>
-      <Header title="オペレーターチャット" />
+      <div className={`chat-page-heading ${chatOpen ? 'hidden lg:block' : ''}`}>
+        <Header title="個別チャット" />
+      </div>
 
       {/* Error */}
       {error && (
@@ -778,9 +848,9 @@ export default function ChatsPage() {
         </div>
       )}
 
-      <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
+      <div className="flex gap-4 chat-workspace h-[calc(100dvh-250px)] lg:h-[calc(100dvh-120px)]">
         {/* Left Panel: Chat List */}
-        <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
+        <div className={`chat-list w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${chatOpen ? 'hidden lg:flex' : 'flex'}`}>
           {/* タブ (全て / 未読 / 対応中 / 解決済) は意図的に削除。直近メッセージが見やすい LINE 風一覧を優先。 */}
 
           {/* Filter row */}
@@ -790,7 +860,7 @@ export default function ChatsPage() {
                 key={f.key}
                 onClick={() => setStatusFilter(f.key)}
                 disabled={unansweredOnly}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                className={`min-h-11 lg:min-h-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                   statusFilter === f.key
                     ? 'bg-green-500 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -852,8 +922,8 @@ export default function ChatsPage() {
                     <button
                       key={chat.id}
                       onClick={() => { setSelectedFriendId(null); handleSelectChat(chat.id); }}
-                      className={`w-full text-left px-4 py-3 border-b border-gray-100 transition-colors ${
-                        isSelected && !selectedFriendId ? 'bg-green-50' : 'hover:bg-gray-50'
+                      className={`chat-list-item w-full text-left px-4 py-3 border-b border-gray-100 transition-colors ${
+                        isSelected && !selectedFriendId ? 'bg-gray-100' : 'hover:bg-gray-50'
                       }`}
                     >
                       <div className="flex items-start gap-3">
@@ -861,7 +931,7 @@ export default function ChatsPage() {
                           <img src={chat.friendPictureUrl} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
                         ) : (
                           <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <span className="text-gray-500 text-sm">{chat.friendName.charAt(0)}</span>
+                            <span className="text-gray-500 text-sm">{nameOf(chat.friendId, chat.friendName).charAt(0)}</span>
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
@@ -870,7 +940,7 @@ export default function ChatsPage() {
                               {chat.status === 'unread' && (
                                 <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" aria-label="未読" />
                               )}
-                              <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
+                              <p className="text-sm font-medium text-gray-900 truncate">{nameOf(chat.friendId, chat.friendName)}</p>
                             </div>
                             <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDatetime(chat.lastMessageAt)}</span>
                           </div>
@@ -907,10 +977,11 @@ export default function ChatsPage() {
         </div>
 
         {/* Right Panel: Chat Detail */}
-        <div className={`flex-1 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId || selectedFriendId ? 'flex' : 'hidden lg:flex'}`}>
+        <div className={`chat-detail min-w-0 min-h-0 flex-1 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId || selectedFriendId ? 'flex' : 'hidden lg:flex'}`}>
           {selectedFriendId && !selectedChatId ? (
             /* Direct message to friend without existing chat */
             <DirectMessagePanel
+              key={selectedFriendId}
               friendId={selectedFriendId}
               friend={allFriends.find((f) => f.id === selectedFriendId) || null}
               onBack={() => setSelectedFriendId(null)}
@@ -927,11 +998,11 @@ export default function ChatsPage() {
           ) : chatDetail ? (
             <>
               {/* Chat Header */}
-              <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between gap-2">
+              <div className="chat-header shrink-0 px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <button
                     onClick={() => setSelectedChatId(null)}
-                    className="lg:hidden flex-shrink-0 p-1 -ml-1 text-gray-500 hover:text-gray-700"
+                    className="lg:hidden flex-shrink-0 min-h-11 min-w-11 flex items-center justify-center -ml-1 text-gray-500 hover:text-gray-700"
                     aria-label="戻る"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -943,7 +1014,7 @@ export default function ChatsPage() {
                   )}
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">
-                      {chatDetail.friendName}
+                      {nameOf(chatDetail.friendId, chatDetail.friendName)}
                     </p>
                     <span
                       className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
@@ -952,7 +1023,7 @@ export default function ChatsPage() {
                     </span>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <details className="chat-status"><summary className="cursor-pointer min-h-11 flex items-center text-sm text-slate-700">対応状況を変更</summary><div className="flex flex-wrap items-center gap-2">
                   {unansweredOnly && chats.length > 1 && (
                     <button
                       type="button"
@@ -996,14 +1067,14 @@ export default function ChatsPage() {
                       解決済にする
                     </button>
                   )}
-                </div>
+                </div></details>
               </div>
 
               {/* Messages — LINE-style chat bubbles */}
-              <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div ref={messagesScrollRef} className="chat-messages min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-3" style={{ backgroundColor: '#ffffff' }}>
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
-                    <p className="text-white/60 text-sm">メッセージはまだありません。</p>
+                    <p className="text-slate-600 text-base">メッセージはまだありません。</p>
                   </div>
                 ) : (
                   (chatDetail.messages ?? []).map((msg, idx) => {
@@ -1023,7 +1094,7 @@ export default function ChatsPage() {
                       try {
                         const parsed = JSON.parse(msg.content)
                         bubbleContent = (
-                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-[200px] rounded" />
+                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-full max-h-[420px] rounded object-contain" />
                         )
                       } catch {
                         bubbleContent = <span>🖼️ [画像]</span>
@@ -1038,7 +1109,7 @@ export default function ChatsPage() {
                       <div key={msg.id}>
                         {showDateSep && (
                           <div className="flex justify-center my-3">
-                            <span className="text-[11px] text-white/85 bg-black/20 px-2.5 py-0.5 rounded-full">
+                            <span className="text-sm text-slate-700 bg-gray-100 px-2.5 py-0.5 rounded-full">
                               {formatYmdSlash(msg.createdAt)}
                             </span>
                           </div>
@@ -1055,20 +1126,20 @@ export default function ChatsPage() {
                             )
                           )}
 
-                          <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
+                          <div className={`min-w-0 max-w-[calc(100%-40px)] lg:max-w-[78%] flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
                             {/* メッセージバブル */}
                             <div
-                              className={`max-w-[320px] px-3 py-2 text-sm break-words whitespace-pre-wrap ${
+                              className={`max-w-full px-4 py-3 text-[17px] leading-7 break-words [overflow-wrap:anywhere] whitespace-pre-wrap ${
                                 isOutgoing
-                                  ? 'rounded-tl-2xl rounded-tr-md rounded-bl-2xl rounded-br-2xl text-white'
-                                  : 'rounded-tl-md rounded-tr-2xl rounded-bl-2xl rounded-br-2xl bg-white text-gray-900'
+                                  ? 'rounded-tl-2xl rounded-tr-md rounded-bl-2xl rounded-br-2xl text-slate-900'
+                                  : 'rounded-tl-md rounded-tr-2xl rounded-bl-2xl rounded-br-2xl bg-gray-100 text-gray-900'
                               }`}
-                              style={isOutgoing ? { backgroundColor: '#06C755' } : undefined}
+                              style={isOutgoing ? { backgroundColor: '#b9efcf' } : undefined}
                             >
                               {bubbleContent}
                             </div>
                             {/* 時刻 */}
-                            <span className="text-xs text-white/50 mt-0.5 px-1">
+                            <span className="text-sm text-slate-600 mt-0.5 px-1">
                               {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -1080,7 +1151,7 @@ export default function ChatsPage() {
               </div>
 
               {/* Notes */}
-              <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
+              <details className="shrink-0 px-4 py-1 border-t border-gray-200 bg-gray-50"><summary className="cursor-pointer min-h-9 flex items-center text-sm text-slate-700">内部メモ</summary>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -1097,11 +1168,11 @@ export default function ChatsPage() {
                     {savingNotes ? '保存中...' : 'メモ保存'}
                   </button>
                 </div>
-              </div>
+              </details>
 
               {/* Send Message Form */}
-              <div className="px-4 py-3 border-t border-gray-200">
-                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600">
+              <div className="chat-composer shrink-0 px-3 py-2 border-t border-gray-200">
+                <details><summary className="cursor-pointer py-1 text-sm text-slate-700">送信設定</summary><div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600">
                   <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -1140,16 +1211,17 @@ export default function ChatsPage() {
                     />
                     <span>Shift+Enter</span>
                   </label>
-                </div>
-                <div className="mb-2">
+                </div></details>
+                <div className="chat-attachments mb-2 flex flex-wrap items-start gap-2">
+                  <PdfAttachment value={pendingPdf} onChange={setPendingPdf} disabled={sending} />
                   <ImageUploader
                     mode="line-image"
                     value={pendingImage}
                     onChange={setPendingImage}
-                    label="画像を送る (任意)"
+                    compact
                   />
                 </div>
-                <div className="flex items-end gap-2">
+                <div className="chat-input-row flex items-end gap-2">
                   <textarea
                     ref={textareaRef}
                     rows={2}
@@ -1172,13 +1244,15 @@ export default function ChatsPage() {
                     }}
                     onBlur={() => setIsMessageInputFocused(false)}
                     onKeyDown={handleKeyDown}
+                    aria-label="メッセージ"
                     placeholder="メッセージを入力..."
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none overflow-y-auto"
+                    disabled={sending}
+                    className="min-w-0 flex-1 text-base border border-gray-300 rounded-lg px-3 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none overflow-y-auto"
                   />
                   <button
                     onClick={handleSendMessage}
-                    disabled={sending || (!messageContent.trim() && !pendingImage)}
-                    className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={sending || (!messageContent.trim() && !pendingImage && !pendingPdf)}
+                    className="min-h-11 shrink-0 px-4 py-2 text-base font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: '#06C755' }}
                   >
                     {sending ? '送信中...' : '送信'}
@@ -1197,8 +1271,9 @@ export default function ChatsPage() {
           直接渡せる (chat list SQL が `id: f.id` で friend_id を返す)。
         */}
         {(selectedChatId || selectedFriendId) && (
-          <div className="hidden xl:flex">
+          <div className="chat-info-panel hidden xl:flex">
             <FriendInfoSidebar
+              onRenamed={handleRenamed}
               friendId={selectedFriendId || selectedChatId}
               chatStatus={
                 chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
@@ -1209,7 +1284,7 @@ export default function ChatsPage() {
           </div>
         )}
       </div>
-      <CcPromptButton prompts={ccPrompts} />
+      <div className="hidden lg:block"><CcPromptButton prompts={ccPrompts} /></div>
     </div>
   )
 }
