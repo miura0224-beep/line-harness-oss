@@ -12,10 +12,10 @@ interface Props {
 
 // Worker base URL for webhook / OAuth / LIFF endpoint registration.
 // In production this is something like https://your-worker.your-subdomain.workers.dev.
-// We derive it from NEXT_PUBLIC_API_URL because the admin UI already requires
-// that env var (build fails without it — see apps/web/src/lib/api.ts).
+// The browser API may use the admin's same-origin proxy. Registration URLs
+// must instead use the actual Worker origin, resolved in next.config.ts.
 function workerBase(): string {
-  const url = process.env.NEXT_PUBLIC_API_URL
+  const url = process.env.NEXT_PUBLIC_WORKER_URL
   if (!url) return ''
   return url.replace(/\/$/, '')
 }

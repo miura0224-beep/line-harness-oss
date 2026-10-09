@@ -1,0 +1,17 @@
+{
+  "name": "line-harness-bridge-slack",
+  "main": "worker.mjs",
+  "account_id": "2ee300693283c4ea8c636711c8ab0dd1",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {"enabled": true},
+  "vars": {
+    "LINE_ACCOUNT_ID": "57f74bd1-8b1b-48d9-bb5f-7bccb78d5a0c",
+    "BACKFILL_BEFORE": "2026-09-21T15:18:45+09:00",
+    "ACCOUNT_LABEL": "ブリッジスター塾生LINE",
+    "CHAT_URL": "https://line-harness-admin-4e0033e1.pages.dev/chats"
+  },
+  "d1_databases": [{"binding":"DB","database_name":"line-harness-db","database_id":"a39bed16-a248-4b16-8f46-c898f5ceafbe"}],
+  "triggers": {"crons":["* * * * *"]}
+}
