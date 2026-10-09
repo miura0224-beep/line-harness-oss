@@ -4,7 +4,7 @@ import { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import {
   getLineAccounts,
-  getFriendByLineUserId,
+  getFriendByLineUserIdForAccount,
   upsertFriend,
   getChatByFriendId,
   createChat,
@@ -177,14 +177,15 @@ async function resolveCaller(c: Context<Env>, token: string): Promise<ResolvedCa
 async function getFriendsByLineUserIds(
   db: D1Database,
   userIds: string[],
+  lineAccountId: string | null,
 ): Promise<Map<string, Friend>> {
   const found = new Map<string, Friend>();
   for (let i = 0; i < userIds.length; i += LOOKUP_CHUNK) {
     const chunk = userIds.slice(i, i + LOOKUP_CHUNK);
     const placeholders = chunk.map(() => '?').join(',');
     const result = await db
-      .prepare(`SELECT * FROM friends WHERE line_user_id IN (${placeholders})`)
-      .bind(...chunk)
+      .prepare(`SELECT * FROM friends WHERE line_user_id IN (${placeholders}) AND line_account_id IS ?`)
+      .bind(...chunk, lineAccountId)
       .all<Friend>();
     for (const row of result.results ?? []) {
       found.set(row.line_user_id, row);
@@ -215,6 +216,7 @@ async function createFriendForRecipient(
 
     const friend = await upsertFriend(db, {
       lineUserId: userId,
+      lineAccountId,
       displayName: profile?.displayName ?? null,
       pictureUrl: profile?.pictureUrl ?? null,
       statusMessage: profile?.statusMessage ?? null,
@@ -313,7 +315,7 @@ async function logProxySend(
         return;
       }
       const friend =
-        (await getFriendByLineUserId(db, parsed.to)) ??
+        (await getFriendByLineUserIdForAccount(db, parsed.to, lineAccountId)) ??
         (await createFriendForRecipient(db, lineClient, parsed.to, lineAccountId));
       if (!friend) return;
       await insertLogRows(db, rowsFor(friend.id, 'push'), source);
@@ -327,7 +329,7 @@ async function logProxySend(
           parsed.to.filter((t): t is string => typeof t === 'string' && LINE_USER_ID_RE.test(t)),
         ),
       ];
-      const known = await getFriendsByLineUserIds(db, userIds);
+      const known = await getFriendsByLineUserIds(db, userIds, lineAccountId);
       const rows: LogRow[] = [];
       let created = 0;
       let skipped = 0;

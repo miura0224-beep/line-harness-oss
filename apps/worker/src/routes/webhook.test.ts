@@ -12,7 +12,7 @@ const lineClientMocks = vi.hoisted(() => ({
 vi.mock('@line-crm/db', () => ({
   upsertFriend: vi.fn(),
   updateFriendFollowStatus: vi.fn(),
-  getFriendByLineUserId: vi.fn(),
+  getFriendByLineUserIdForAccount: vi.fn(),
   getScenarios: vi.fn(),
   enrollFriendInScenario: vi.fn(),
   getScenarioSteps: vi.fn(),
@@ -62,7 +62,7 @@ import {
   computeNextDeliveryAt,
   enrollFriendInScenario,
   getEntryRouteByRefCode,
-  getFriendByLineUserId,
+  getFriendByLineUserIdForAccount,
   getLineAccounts,
   getMessageTemplateById,
   getScenarioSteps,
@@ -195,7 +195,7 @@ describe('POST /webhook — postback events', () => {
   test('fires postback_received with postback.data so IF-THEN automations run on rich menu taps', async () => {
     vi.mocked(verifySignature).mockResolvedValue(true);
     vi.mocked(jstNow).mockReturnValue('2026-07-19T12:00:00.000+09:00');
-    vi.mocked(getFriendByLineUserId).mockResolvedValue({
+    vi.mocked(getFriendByLineUserIdForAccount).mockResolvedValue({
       id: 'friend-1',
       line_user_id: 'U-existing',
       display_name: 'Existing Friend',
@@ -277,7 +277,7 @@ describe('POST /webhook — postback events', () => {
   test('silent auto-reply rule suppresses the reply but still fires postback_received as matched', async () => {
     vi.mocked(verifySignature).mockResolvedValue(true);
     vi.mocked(jstNow).mockReturnValue('2026-07-19T12:00:00.000+09:00');
-    vi.mocked(getFriendByLineUserId).mockResolvedValue({
+    vi.mocked(getFriendByLineUserIdForAccount).mockResolvedValue({
       id: 'friend-1',
       line_user_id: 'U-existing',
       display_name: 'Existing Friend',
@@ -371,7 +371,7 @@ describe('POST /webhook — postback events', () => {
 describe('POST /webhook — first-contact existing friends', () => {
   test('auto-registers an unknown text-message sender without firing friend_add handling', async () => {
     vi.mocked(verifySignature).mockResolvedValue(true);
-    vi.mocked(getFriendByLineUserId).mockResolvedValue(null);
+    vi.mocked(getFriendByLineUserIdForAccount).mockResolvedValue(null);
     vi.mocked(jstNow).mockReturnValue('2026-06-18T12:00:00.000+09:00');
     lineClientMocks.getProfile.mockResolvedValue({
       userId: 'U-existing',
@@ -454,6 +454,7 @@ describe('POST /webhook — first-contact existing friends', () => {
 
     expect(lineClientMocks.getProfile).toHaveBeenCalledWith('U-existing');
     expect(upsertFriend).toHaveBeenCalledWith(db, {
+      lineAccountId: null,
       lineUserId: 'U-existing',
       displayName: 'Existing Friend',
       pictureUrl: 'https://example.com/profile.jpg',

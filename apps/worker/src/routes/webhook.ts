@@ -5,7 +5,7 @@ import { createStickerMessageContent } from '@line-crm/shared';
 import {
   upsertFriend,
   updateFriendFollowStatus,
-  getFriendByLineUserId,
+  getFriendByLineUserIdForAccount,
   getScenarios,
   enrollFriendInScenario,
   upsertChatOnMessage,
@@ -39,7 +39,7 @@ async function ensureFriendFromWebhookUser(
   userId: string,
   lineAccountId: string | null,
 ): Promise<Friend | null> {
-  let friend = await getFriendByLineUserId(db, userId);
+  let friend = await getFriendByLineUserIdForAccount(db, userId, lineAccountId);
 
   if (!friend) {
     let profile: Awaited<ReturnType<LineClient['getProfile']>> | null = null;
@@ -54,20 +54,12 @@ async function ensureFriendFromWebhookUser(
 
     friend = await upsertFriend(db, {
       lineUserId: userId,
+      lineAccountId,
       displayName: profile?.displayName ?? null,
       pictureUrl: profile?.pictureUrl ?? null,
       statusMessage: profile?.statusMessage ?? null,
     });
     console.log(`[webhook] auto-registered existing friend userId=${userId} friendId=${friend.id}`);
-  }
-
-  if (lineAccountId && friend.line_account_id !== lineAccountId) {
-    const now = jstNow();
-    await db
-      .prepare('UPDATE friends SET line_account_id = ?, is_following = 1, updated_at = ? WHERE id = ?')
-      .bind(lineAccountId, now, friend.id)
-      .run();
-    friend = { ...friend, line_account_id: lineAccountId, is_following: 1, updated_at: now };
   }
 
   return friend;
@@ -218,19 +210,13 @@ async function handleEvent(
 
     const friend = await upsertFriend(db, {
       lineUserId: userId,
+      lineAccountId,
       displayName: profile?.displayName ?? null,
       pictureUrl: profile?.pictureUrl ?? null,
       statusMessage: profile?.statusMessage ?? null,
     });
 
     console.log(`[follow] friend.id=${friend.id} friend.line_account_id=${(friend as any).line_account_id}`);
-
-    // Set line_account_id for multi-account tracking (always update on follow)
-    if (lineAccountId) {
-      await db.prepare('UPDATE friends SET line_account_id = ?, updated_at = ? WHERE id = ?')
-        .bind(lineAccountId, jstNow(), friend.id).run();
-      console.log(`[follow] line_account_id set to ${lineAccountId} for friend ${friend.id}`);
-    }
 
     // 新規・再フォローのどちらでも、最初の友だち登録マイルを同じキーで非同期投入する。
     // first_followed_at を使うため再フォローやWebhook再送では二重加算されない。
@@ -360,7 +346,7 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    await updateFriendFollowStatus(db, userId, false);
+    await updateFriendFollowStatus(db, userId, false, lineAccountId);
     return;
   }
 

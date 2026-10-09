@@ -743,12 +743,17 @@ liffRoutes.get('/auth/callback', async (c) => {
     // Detect a brand-new friend BEFORE upsertFriend creates the row, so the ASP
     // affiliate friend-add notification fires once per genuinely-new add (a
     // re-touch of an existing friend must not re-notify the affiliate).
-    const preExistingFriend = await getFriendByLineUserId(db, lineUserId);
+    const oauthAccount = accountParam
+      ? await getLineAccountByChannelId(db, accountParam)
+      : (await getLineAccounts(db)).find(a => a.is_active && a.login_channel_id === loginChannelId);
+    const oauthAccountId = oauthAccount?.id ?? null;
+    const preExistingFriend = await getFriendByLineUserIdForAccount(db, lineUserId, oauthAccountId);
     const isNewFriend = !preExistingFriend;
 
     // Upsert friend (may not exist yet if webhook hasn't fired)
     const friend = await upsertFriend(db, {
       lineUserId,
+      lineAccountId: oauthAccountId,
       displayName,
       pictureUrl,
       statusMessage: null,

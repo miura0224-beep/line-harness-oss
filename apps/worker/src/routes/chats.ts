@@ -7,6 +7,7 @@ import {
   updateOperator,
   deleteOperator,
   getChats,
+  getChatSummary,
   getChatById,
   createChat,
   getFriendById,
@@ -182,6 +183,18 @@ chats.delete('/api/operators/:id', async (c) => {
 });
 
 // ========== チャットCRUD ==========
+
+// Count explicit operator statuses over all friends, independently of list pagination.
+chats.get('/api/chats/summary', async (c) => {
+  try {
+    const accountId = c.req.query('lineAccountId');
+    const data = await getChatSummary(c.env.DB, accountId);
+    return c.json({ success: true, data });
+  } catch (err) {
+    console.error('GET /api/chats/summary error:', err);
+    return c.json({ success: false, error: '対応状況を取得できませんでした' }, 500);
+  }
+});
 
 chats.get('/api/chats', async (c) => {
   try {
@@ -424,9 +437,9 @@ chats.get('/api/chats/:id', async (c) => {
     const createdAt = chatRow?.created_at ?? null;
 
     const friend = await c.env.DB
-      .prepare(`SELECT display_name, picture_url, line_user_id FROM friends WHERE id = ?`)
+      .prepare(`SELECT display_name, picture_url, line_user_id, line_account_id FROM friends WHERE id = ?`)
       .bind(resolvedFriendId)
-      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string }>();
+      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string; line_account_id: string | null }>();
 
     // 新しい1000件を取って昇順に戻す。LIMIT 200 ASC だと古い200件だけで broadcast/scenario 等の
     // 新しい push が欠落していた（Shu で 481件中 281件欠落のバグあり）。一覧側と同様に test 配信は除外。
@@ -446,6 +459,7 @@ chats.get('/api/chats/:id', async (c) => {
       success: true,
       data: {
         id: responseId,
+        lineAccountId: friend?.line_account_id ?? null,
         friendId: resolvedFriendId,
         friendName: friend?.display_name || '名前なし',
         friendPictureUrl: friend?.picture_url || null,

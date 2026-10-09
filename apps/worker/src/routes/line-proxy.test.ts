@@ -7,7 +7,7 @@ const lineClientMocks = vi.hoisted(() => ({
 
 vi.mock('@line-crm/db', () => ({
   getLineAccounts: vi.fn(),
-  getFriendByLineUserId: vi.fn(),
+  getFriendByLineUserIdForAccount: vi.fn(),
   upsertFriend: vi.fn(),
   getChatByFriendId: vi.fn(),
   createChat: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('../services/step-delivery.js', () => ({
 
 import {
   getLineAccounts,
-  getFriendByLineUserId,
+  getFriendByLineUserIdForAccount,
   upsertFriend,
   getChatByFriendId,
   createChat,
@@ -164,7 +164,7 @@ beforeEach(() => {
   fetchMock = vi.fn(async () => upstreamResponse());
   vi.stubGlobal('fetch', fetchMock);
   vi.mocked(getLineAccounts).mockResolvedValue([ACCOUNT] as never);
-  vi.mocked(getFriendByLineUserId).mockResolvedValue(FRIEND as never);
+  vi.mocked(getFriendByLineUserIdForAccount).mockResolvedValue(FRIEND as never);
   vi.mocked(getChatByFriendId).mockResolvedValue({ id: 'chat-1', status: 'unread' } as never);
   vi.mocked(updateChat).mockResolvedValue(undefined as never);
   vi.mocked(authenticateApiToken).mockResolvedValue(null as never);
@@ -394,7 +394,7 @@ describe('push', () => {
 
   test('unknown recipient → profile fetched, friend created, account pinned', async () => {
     const newUser = U(0x999);
-    vi.mocked(getFriendByLineUserId).mockResolvedValue(null as never);
+    vi.mocked(getFriendByLineUserIdForAccount).mockResolvedValue(null as never);
     lineClientMocks.getProfile.mockResolvedValue({ displayName: 'New User' });
     vi.mocked(upsertFriend).mockResolvedValue({ id: 'friend-new', line_user_id: newUser } as never);
     vi.mocked(getChatByFriendId).mockResolvedValue(null as never);
@@ -428,7 +428,7 @@ describe('push', () => {
   });
 
   test('logging failure does not break the 200 response', async () => {
-    vi.mocked(getFriendByLineUserId).mockRejectedValue(new Error('db down'));
+    vi.mocked(getFriendByLineUserIdForAccount).mockRejectedValue(new Error('db down'));
     const { db } = fakeDb();
     const res = await setupApp().request(pushRequest('acc-token'), {}, env(db));
     expect(res.status).toBe(200);
@@ -464,7 +464,7 @@ describe('multicast', () => {
     const rows = loggedRows(executed);
     expect(rows).toHaveLength(4);
     expect(new Set(rows.map((r) => r.friendId))).toEqual(new Set(['f1', 'f2']));
-    expect(getFriendByLineUserId).not.toHaveBeenCalled();
+    expect(getFriendByLineUserIdForAccount).not.toHaveBeenCalled();
   });
 
   test('unknown recipients beyond the creation cap are skipped, known ones still logged', async () => {

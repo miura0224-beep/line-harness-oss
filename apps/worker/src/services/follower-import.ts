@@ -186,9 +186,9 @@ async function importIdPage(
       .prepare(
         `SELECT line_user_id, line_account_id, is_following
            FROM friends
-          WHERE line_user_id IN (${placeholders})`,
+          WHERE line_user_id IN (${placeholders}) AND line_account_id = ?`,
       )
-      .bind(...group)
+      .bind(...group, lineAccountId)
       .all<ExistingFriend>();
     for (const row of rows.results ?? []) existingById.set(row.line_user_id, row);
   }
@@ -220,7 +220,7 @@ async function importIdPage(
            (id, line_user_id, display_name, picture_url, status_message,
             is_following, line_account_id, created_at, updated_at)
          VALUES (?, ?, NULL, NULL, NULL, 1, ?, ?, ?)
-         ON CONFLICT(line_user_id) DO UPDATE SET
+         ON CONFLICT DO UPDATE SET
            line_account_id = COALESCE(friends.line_account_id, excluded.line_account_id),
            is_following = 1,
            updated_at = excluded.updated_at
