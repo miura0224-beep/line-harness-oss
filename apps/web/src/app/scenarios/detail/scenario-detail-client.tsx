@@ -65,7 +65,8 @@ function formatScheduleLabel(mode: DeliveryMode | undefined, step: ScenarioStep)
     if (r > 0) parts.push(`${r}分`)
     return `購読開始から${parts.join('')}後`
   }
-  // absolute_time
+  // absolute_time（0日後 00:00 は「登録直後」として設定される）
+  if ((step.offsetDays ?? 0) === 0 && (step.deliveryTime ?? '00:00') === '00:00') return '登録直後 (即時)'
   return `購読開始から${step.offsetDays ?? 0}日後の ${step.deliveryTime ?? '00:00'}`
 }
 
@@ -79,10 +80,17 @@ interface StepFormState {
   inputMode: 'direct' | 'template'
 }
 
-function emptyStepForm(stepOrder: number): StepFormState {
+// 「毎日◯時に配信」のシナリオは、1通目=登録直後(0日後 00:00)、2通目以降=前のステップの翌日 20:00 を初期値にする。
+// 直後に届かないと登録した人が不安になるため、初期値の時点で即時にしておく。
+function emptyStepForm(stepOrder: number, mode?: DeliveryMode, lastOffsetDays?: number): StepFormState {
+  const schedule = { ...emptySchedule }
+  if (mode === 'absolute_time') {
+    if (stepOrder <= 1) { schedule.offsetDays = 0; schedule.deliveryTime = '00:00' }
+    else { schedule.offsetDays = (lastOffsetDays ?? 0) + 1; schedule.deliveryTime = '20:00' }
+  }
   return {
     stepOrder,
-    schedule: { ...emptySchedule },
+    schedule,
     messageType: 'text',
     messageContent: '',
     templateId: null,
@@ -243,7 +251,10 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
   const openAddStep = () => {
     const nextOrder = scenario ? (scenario.steps.length > 0 ? Math.max(...scenario.steps.map(s => s.stepOrder)) + 1 : 1) : 1
-    setStepForm(emptyStepForm(nextOrder))
+    const lastOffset = scenario && scenario.steps.length > 0
+      ? Math.max(...scenario.steps.map((s) => s.offsetDays ?? 0))
+      : 0
+    setStepForm(emptyStepForm(nextOrder, scenario?.deliveryMode, lastOffset))
     setEditingStepId(null)
     setShowStepForm(true)
     setStepError('')

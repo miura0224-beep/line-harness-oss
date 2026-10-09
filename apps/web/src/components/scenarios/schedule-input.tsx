@@ -99,9 +99,35 @@ export default function ScheduleInput({ mode, value, onChange }: Props) {
     )
   }
   // absolute_time
+  // 「登録直後」= 0日後の 00:00。computeNextDeliveryAt は過去時刻を now に丸めるので、
+  // 何時に登録されても次の cron 実行（最大5分）で即送られる。
+  const isImmediate = value.offsetDays === 0 && value.deliveryTime === '00:00'
   return (
     <div className="space-y-2">
-      <label className="block text-xs font-medium text-gray-600">購読開始から</label>
+      <label className="block text-xs font-medium text-gray-600">配信タイミング</label>
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-2 text-sm text-gray-800">
+          <input
+            type="radio"
+            className="h-4 w-4"
+            checked={isImmediate}
+            onChange={() => onChange({ ...value, offsetDays: 0, deliveryTime: '00:00' })}
+          />
+          登録直後に配信（時刻を指定しない）
+        </label>
+        <label className="flex items-center gap-2 text-sm text-gray-800">
+          <input
+            type="radio"
+            className="h-4 w-4"
+            checked={!isImmediate}
+            onChange={() => onChange({ ...value, offsetDays: Math.max(1, value.offsetDays || 1), deliveryTime: value.deliveryTime === '00:00' ? '20:00' : value.deliveryTime })}
+          />
+          日時を指定して配信
+        </label>
+      </div>
+      {isImmediate ? (
+        <p className="text-xs text-gray-500">友だち追加・タグ付与の直後に送ります（最大5分の遅れ）。</p>
+      ) : (
       <div className="flex items-center gap-2 flex-wrap">
         <input
           type="number"
@@ -119,6 +145,7 @@ export default function ScheduleInput({ mode, value, onChange }: Props) {
         />
         <span className="text-sm text-gray-700">に配信</span>
       </div>
+      )}
       <p className="text-xs text-gray-400">ⓘ cron が 5 分粒度のため最大 5 分遅れる場合があります</p>
     </div>
   )
