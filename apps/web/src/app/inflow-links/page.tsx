@@ -8,6 +8,7 @@ import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import type { EntryRoute, TrafficPool, Scenario, Tag } from '@line-crm/shared'
 import EditRouteModal from './_components/edit-route-modal'
+import { workerBase } from '@/lib/worker-url'
 
 interface MessageTemplate {
   id: string
@@ -51,7 +52,7 @@ interface RefDetail {
   friends: RefFriend[]
 }
 
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
+const WORKER_BASE = workerBase()
 
 export default function InflowLinksPage() {
   const { selectedAccountId } = useAccount()

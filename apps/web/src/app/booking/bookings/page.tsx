@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Header from '@/components/layout/header'
 import { bookingApi, type BookingRequest } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
+import { workerBase as workerBaseUrl } from '@/lib/worker-url'
 import {
   getBookingTimeGroup,
   isRecentlyReceived,
@@ -96,7 +97,7 @@ export default function BookingsPage() {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
 
   const liffId = selectedAccount?.liffId ?? null
-  const workerBase = process.env.NEXT_PUBLIC_API_URL ?? ''
+  const workerBase = workerBaseUrl()
   const shareUrl = workerBase && liffId
     ? `${workerBase}/o?liffId=${encodeURIComponent(liffId)}&page=salon-book`
     : null

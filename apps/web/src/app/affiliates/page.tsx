@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Header from '@/components/layout/header'
 import { api, type AffiliateOffer, type ConversionApprovalItem } from '@/lib/api'
 import type { Tag, Scenario, LineAccount } from '@line-crm/shared'
+import { workerBase } from '@/lib/worker-url'
 
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL
+const WORKER_BASE = workerBase()
 if (!WORKER_BASE) {
   throw new Error('NEXT_PUBLIC_API_URL is not set. Build cannot proceed.')
 }

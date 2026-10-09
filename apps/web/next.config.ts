@@ -24,6 +24,7 @@ const nextConfig: NextConfig = {
   output: 'export',
   transpilePackages: ['@line-crm/shared'],
   env: {
+    NEXT_PUBLIC_WORKER_URL: process.env.ADMIN_API_UPSTREAM || process.env.NEXT_PUBLIC_WORKER_URL || process.env.NEXT_PUBLIC_API_URL || '',
     APP_VERSION: pkg.version,
     APP_COMMIT_SHA: buildSha.slice(0, 12),
     APP_BUILD_TIME: buildTime,
