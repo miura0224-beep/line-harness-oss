@@ -468,9 +468,9 @@ CREATE TABLE friend_tags (
   PRIMARY KEY (friend_id, tag_id)
 );
 
-CREATE TABLE friends (
+CREATE TABLE "friends" (
   id               TEXT PRIMARY KEY,
-  line_user_id     TEXT UNIQUE NOT NULL,
+  line_user_id TEXT NOT NULL,
   display_name     TEXT,
   picture_url      TEXT,
   status_message   TEXT,
@@ -1256,11 +1256,15 @@ CREATE INDEX idx_friend_scores_friend ON friend_scores (friend_id);
 
 CREATE INDEX idx_friend_tags_tag_id ON friend_tags (tag_id);
 
+CREATE UNIQUE INDEX idx_friends_account_identity ON friends(line_user_id,line_account_id);
+
 CREATE INDEX idx_friends_follow_tenure ON friends(is_following, current_follow_started_at);
 
 CREATE INDEX idx_friends_ig_igsid ON friends (ig_igsid);
 
 CREATE INDEX idx_friends_line_user_id ON friends (line_user_id);
+
+CREATE UNIQUE INDEX idx_friends_unassigned_identity ON friends(line_user_id) WHERE line_account_id IS NULL;
 
 CREATE INDEX idx_friends_user_id ON friends (user_id);
 
