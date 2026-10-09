@@ -101,16 +101,41 @@ if (!API_URL) {
  * directly, so the token is delivered in the login/session response body and
  * cached here.
  */
+/** フォームの設問。optionTags は「選択肢 → タグ名」（回答者に自動でタグを付ける。複数は | 区切り） */
+export type FormFieldDef = {
+  name: string
+  label: string
+  type: 'text' | 'textarea' | 'email' | 'number' | 'select' | 'radio' | 'checkbox' | string
+  required?: boolean
+  options?: string[]
+  optionTags?: Record<string, string>
+}
+export type FormSummary = { id: string; name: string; isActive?: boolean; submissionCount?: number }
+export type FormDetail = {
+  id: string
+  name: string
+  description?: string | null
+  fields: FormFieldDef[]
+  onSubmitTagId?: string | null
+  saveToMetadata?: boolean
+  isActive?: boolean
+}
+
 export const CSRF_STORAGE_KEY = 'lh_csrf'
 
 export function getCsrfToken(): string {
   if (typeof window === 'undefined') return ''
-  return localStorage.getItem(CSRF_STORAGE_KEY) || ''
+  // On a same-origin deployment this cookie also works with localStorage disabled.
+  const cookie = document.cookie.split('; ').find(value => value.startsWith('lh_csrf='))
+  if (cookie) {
+    try { return decodeURIComponent(cookie.slice('lh_csrf='.length)) } catch { /* try storage */ }
+  }
+  try { return localStorage.getItem(CSRF_STORAGE_KEY) || '' } catch { return '' }
 }
 
 export function setCsrfToken(token: string | undefined | null): void {
   if (typeof window === 'undefined' || !token) return
-  localStorage.setItem(CSRF_STORAGE_KEY, token)
+  try { localStorage.setItem(CSRF_STORAGE_KEY, token) } catch { /* same-origin cookie fallback */ }
 }
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
@@ -130,23 +155,47 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * サーバーが持つ CSRF トークンを取り直して保存する。
+ * 管理画面(pages.dev)と API(workers.dev) はドメインが違うため document.cookie から
+ * lh_csrf を読めず、localStorage の値が古いままだと全ての更新系が 403 になる。
+ */
+async function refreshCsrfToken(): Promise<string> {
+  try {
+    const res = await fetch(`${API_URL}/api/auth/session`, { credentials: 'include', cache: 'no-store' })
+    if (!res.ok) return ''
+    const data = await res.json()
+    const token = data?.csrfToken || ''
+    if (token) setCsrfToken(token)
+    return token
+  } catch {
+    return ''
+  }
+}
+
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase()
-  const csrfHeaders: Record<string, string> = {}
-  if (MUTATING_METHODS.has(method)) {
-    const token = getCsrfToken()
-    if (token) csrfHeaders['X-CSRF-Token'] = token
+  const mutating = MUTATING_METHODS.has(method)
+  const send = async (token: string) => {
+    const csrfHeaders: Record<string, string> = {}
+    if (mutating && token) csrfHeaders['X-CSRF-Token'] = token
+    return fetch(`${API_URL}${path}`, {
+      ...options,
+      // Send the HttpOnly session cookie with every request.
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...csrfHeaders,
+        ...options?.headers,
+      },
+    })
   }
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    // Send the HttpOnly session cookie with every request.
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...csrfHeaders,
-      ...options?.headers,
-    },
-  })
+  let res = await send(getCsrfToken())
+  // 403 = CSRF 不一致。サーバーから取り直して 1 度だけ再送する（古いトークンで詰まるのを防ぐ）
+  if (res.status === 403 && mutating) {
+    const fresh = await refreshCsrfToken()
+    if (fresh) res = await send(fresh)
+  }
   if (!res.ok) throw new ApiError(res.status)
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -286,6 +335,9 @@ export type FriendListItem = FriendWithTags & Partial<{
 
 export const api = {
   friends: {
+    /** 補足情報(metadata)を追記・更新する（既存のキーは残る）。管理用の名前は customName に入れる */
+    setMetadata: (id: string, data: Record<string, unknown>) =>
+      fetchApi<ApiResponse<unknown>>(`/api/friends/${id}/metadata`, { method: 'PUT', body: JSON.stringify(data) }),
     list: (params?: FriendListParams) => {
       const query: Record<string, string> = {}
       if (params?.offset) query.offset = String(params.offset)
@@ -324,6 +376,15 @@ export const api = {
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
         `/api/friends/${id}/rich-menu`,
       ),
+  },
+  /** フォーム（アンケート）の閲覧・編集。管理画面の「フォーム編集」用。 */
+  forms: {
+    list: () => fetchApi<ApiResponse<FormSummary[] | { items: FormSummary[] }>>('/api/forms'),
+    get: (id: string) => fetchApi<ApiResponse<FormDetail>>(`/api/forms/${id}`),
+    update: (id: string, data: Partial<Pick<FormDetail, 'name' | 'description' | 'fields' | 'onSubmitTagId' | 'saveToMetadata' | 'isActive'>>) =>
+      fetchApi<ApiResponse<FormDetail>>(`/api/forms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    create: (data: { name: string; description?: string; fields: FormFieldDef[] }) =>
+      fetchApi<ApiResponse<FormDetail>>('/api/forms', { method: 'POST', body: JSON.stringify(data) }),
   },
   tags: {
     /** withCounts で friendCount 付き (JOIN 集計 — タグ管理ページ用)。 */
@@ -975,6 +1036,7 @@ export const api = {
     send: (id: string, data: { content: string; messageType?: string }) =>
       fetchApi<ApiResponse<unknown>>(`/api/chats/${id}/send`, {
         method: 'POST',
+        headers: { 'X-Line-Harness-Source': 'manual' },
         body: JSON.stringify(data),
       }),
   },
@@ -1417,8 +1479,7 @@ export const api = {
 
     // 画像 upload は Content-Type を image/* で送るので fetchApi を使わず直接 fetch。
     uploadImage: async (groupId: string, pageId: string, file: File) => {
-      const csrf = getCsrfToken();
-      const res = await fetch(
+      const post = (csrf: string) => fetch(
         `${API_URL}/api/rich-menu-groups/${groupId}/pages/${pageId}/image`,
         {
           method: 'POST',
@@ -1430,6 +1491,11 @@ export const api = {
           body: file,
         },
       );
+      let res = await post(getCsrfToken());
+      if (res.status === 403) {
+        const fresh = await refreshCsrfToken();
+        if (fresh) res = await post(fresh);
+      }
       const body = (await res.json()) as ApiResponse<{
         imageR2Key: string;
         imageContentType: string;
