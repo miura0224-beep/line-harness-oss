@@ -22,3 +22,4 @@ apps/worker/dist/
 .claude/worktrees/
 .line-harness-setup.json
 .line-harness-config.json
+apps/worker/wrangler.production.toml

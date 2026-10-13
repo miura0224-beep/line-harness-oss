@@ -26,6 +26,12 @@ const dbMocks = {
   recoverStuckDeliveries: vi.fn(),
   // /auth/callback deps
   getFriendByLineUserId: vi.fn(),
+  // アカウントスコープ版。各テストは getFriendByLineUserId を設定するので、
+  // ここから委譲して同じ戻り値を使う（mock漏れがあると /auth/callback が
+  // 例外で抜け、テストが素通りしてしまう）。
+  getFriendByLineUserIdForAccount: vi.fn((db: unknown, lineUserId: string) =>
+    dbMocks.getFriendByLineUserId(db, lineUserId),
+  ),
   upsertFriend: vi.fn(),
   createUser: vi.fn().mockResolvedValue({ id: 'U-uuid' }),
   getUserByEmail: vi.fn().mockResolvedValue(null),
