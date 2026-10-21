@@ -4,7 +4,9 @@ import type { Env } from '../index.js';
 const analysisMessages = new Hono<Env>();
 const DAY = 24 * 60 * 60 * 1000;
 class AnalysisError extends Error {
-  constructor(public status: 400 | 409 | 422, public code: string, message: string) { super(message); }
+  status: 400 | 409 | 422;
+  code: string;
+  constructor(status: 400 | 409 | 422, code: string, message: string) { super(message); this.status=status; this.code=code; }
 }
 
 // Do not let Date.parse silently repair invalid calendar dates. Inputs require an
@@ -60,10 +62,18 @@ analysisMessages.get('/api/analysis/messages', async (c) => {
     const scopeKey = JSON.stringify(scope);
     const cursor = query.has('cursor') ? decodeCursor(query.get('cursor')!) : null;
     if (cursor && cursor.scope !== scopeKey) throw new AnalysisError(409, 'cursor_scope_changed', 'Cursor belongs to a different analysis scope');
+    const {results: accounts} = await c.env.DB.prepare('SELECT id,is_active FROM line_accounts WHERE id=?').bind(account).all<{id:string;is_active:number}>();
+    if (!accounts[0] || accounts[0].is_active !== 1) throw new AnalysisError(409,'unknown_account','Analysis requires an existing active account');
 
     // Metadata only: do not retrieve unrelated friends' outgoing bodies. Include
     // rows claiming this account as well, so contradictory ownership fails closed.
-    const {results: metadata} = await c.env.DB.prepare(`SELECT ${META} FROM messages_log m LEFT JOIN friends f ON f.id=m.friend_id WHERE f.line_account_id=? OR m.line_account_id=?`).bind(account,account).all<Metadata>();
+    // Prune valid historical rows in SQL before transferring metadata to the
+    // Worker. One-second guard bands avoid floating-point boundary loss; JS
+    // still makes the exact millisecond decisions below. Undatable rows remain
+    // an explicit error because they cannot safely be declared outside scope.
+    const sqlTime = `julianday(CASE WHEN substr(m.created_at,-1) IN ('Z','z') OR substr(m.created_at,-6,1) IN ('+','-') THEN m.created_at ELSE m.created_at||'+09:00' END)`;
+    const calendar = `date(substr(m.created_at,1,10),'+0 days')`;
+    const {results: metadata} = await c.env.DB.prepare(`SELECT ${META} FROM messages_log m LEFT JOIN friends f ON f.id=m.friend_id WHERE (f.line_account_id=? OR m.line_account_id=?) AND (${sqlTime} IS NULL OR ${calendar} IS NULL OR ${calendar}!=substr(m.created_at,1,10) OR (${sqlTime}>=julianday(?) - 1.0/86400 AND ${sqlTime}<=julianday(?) + 1.0/86400))`).bind(account,account,scope.since,scope.asOf).all<Metadata>();
     const normalized = metadata.map(row => {
       if (row.canonical_account !== account || (row.line_account_id !== null && row.line_account_id !== account)) throw new AnalysisError(409, 'account_mismatch', `Message account conflicts with friend ownership: ${row.id}`);
       let time: number;

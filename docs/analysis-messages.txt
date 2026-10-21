@@ -1,0 +1,20 @@
+GET /api/analysis/messages
+
+既存API認証内の、日次分析専用のread-only経路。未対応queue /api/conversations の意味を変更しない。
+必須: lineAccountId, since, until, asOf。明示offset付きISO日時、since<until<=asOf、入力と返信lookaheadは各最大24h。
+任意: limit整数1..200（既定200）、前ページのcursor。
+登録済みactive accountのみ。未登録・inactiveを正常な受信0と扱わない。
+
+対象incomingはJST等を正規化した[since,until)のtext。postback/testを除外し、is_following、返信済み、resolvedでは除外しない。同じfriendのoutgoingはsince以上asOf以下まで取得する。本文は対象pageのIDだけ取得する。
+friend所属accountが真実源。message account NULLは補完、矛盾は409。source NULLはunknownで、manualと推測しない。
+created_atのZ/offsetを正規化し、古いtimezoneなしは既存DB慣例のJST。SQLで期間候補metadataを絞り、厳密な境界はJSで判定する。日付不正・日時不明は黙って除外せず422。日時不明は期間外と証明できないため古い行でも停止し得る。
+
+各pageのdata: {items,total,nextCursor,counts:{incoming,conversations,postbackExcluded,testExcluded},scope:{lineAccountId,since,until,asOf}}。
+postbackExcluded/testExcludedは条件が重なる行を双方に数える。合計を排他的な除外件数と解釈しない。
+cursorはscope、stream metadata hash、正規化時刻とIDに紐づく。metadataの変化は409で停止。本文だけの編集はcursor hash対象外なので、本文snapshotの保証とは呼ばない。consumerは実本文・prompt・knowledge/rulesのhashを保存する。
+
+本文・資格情報の追加保存、GETのDB変更・LINE送信はない。schema変更もない。
+性能: SQLでは期間候補へ限定し、Workerへ全履歴metadataを返さない。ただし日時式とaccount joinのサーバースキャンは残る。本番のrows_read/CPU/応答時間の読み取り計測は公開承認後に必要。黙ってlimitを減らす回避はしない。
+
+検証はworkerのanalysis-messages.test.tsとconversations.test.ts、全workerテスト、tsc。
+この変更の公開承認は従来のD1タグbind修正とは別に必要。顧客データ・秘密値をソースやテストへ含めない。

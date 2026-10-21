@@ -15,6 +15,8 @@ const defaults = {lineAccountId:'A',since:'2026-10-20T00:00:00+09:00',until:'202
 function fixture() {
   const native = new DatabaseSync(':memory:'); databases.push(native);
   native.exec(`CREATE TABLE friends(id TEXT PRIMARY KEY,line_account_id TEXT,is_following INTEGER);
+    CREATE TABLE line_accounts(id TEXT PRIMARY KEY,is_active INTEGER);
+    INSERT INTO line_accounts VALUES('A',1),('B',1),('inactive',0);
     CREATE TABLE chats(friend_id TEXT,status TEXT);
     CREATE TABLE messages_log(id TEXT PRIMARY KEY,friend_id TEXT,line_account_id TEXT,direction TEXT,message_type TEXT,source TEXT,delivery_type TEXT,created_at TEXT,content TEXT);`);
   const reads: {sql:string;params:unknown[]}[] = [];
@@ -39,6 +41,20 @@ function fixture() {
 }
 
 describe('scoped daily analysis input (real SQLite reads, no mutations or sends)',() => {
+  test('unknown and inactive account cannot become a successful empty analysis',async()=>{
+    const f=fixture();
+    for(const lineAccountId of ['does-not-exist','inactive'])expect((await f.request({lineAccountId})).status).toBe(409);
+    const valid=await f.request();expect(valid.status).toBe(200);expect((await valid.json() as any).data.total).toBe(0);
+  });
+  test('valid historical metadata is pruned before transfer, without losing boundary rows',async()=>{
+    const f=fixture();f.friend('f');
+    for(let i=0;i<1000;i++)f.message('old-'+i,'f',{at:'2025-01-01T00:00:00+09:00'});
+    f.message('boundary','f',{at:'2026-10-19T15:00:00.000Z'});
+    f.message('old-conflict','f',{account:'B',at:'2025-01-01T00:00:00+09:00'});
+    const response=await f.request();expect(response.status).toBe(200);
+    expect((await response.json() as any).data.items.map((x:any)=>x.id)).toEqual(['boundary']);
+    expect(f.reads.find(r=>r.sql.includes('LEFT JOIN friends'))?.sql).toContain('julianday(?)');
+  });
   test('paginates more than 200 messages with time ties, stable counts and an exact end cursor',async () => {
     const f=fixture(); f.friend('f');
     for(let i=249;i>=0;i--) f.message(`m${String(i).padStart(3,'0')}`,'f');
