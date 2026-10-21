@@ -133,12 +133,15 @@ conversations.get('/api/conversations', async (c) => {
     // tags lookup (friend_id -> tag names)
     const friendIds = results.map((r) => (r as { friend_id: string }).friend_id);
     const tagMap: Record<string, string[]> = {};
-    if (friendIds.length > 0) {
-      const placeholders = friendIds.map(() => '?').join(',');
+    // D1 allows at most 100 bound parameters per statement. Keep the full
+    // conversation page and collect tags for every friend in bounded chunks.
+    for (let i = 0; i < friendIds.length; i += 100) {
+      const chunk = friendIds.slice(i, i + 100);
+      const placeholders = chunk.map(() => '?').join(',');
       const tagRows = await c.env.DB.prepare(
         `SELECT ft.friend_id, t.name FROM friend_tags ft JOIN tags t ON t.id = ft.tag_id WHERE ft.friend_id IN (${placeholders})`,
       )
-        .bind(...friendIds)
+        .bind(...chunk)
         .all<{ friend_id: string; name: string }>();
       for (const row of tagRows.results) {
         (tagMap[row.friend_id] ??= []).push(row.name);
