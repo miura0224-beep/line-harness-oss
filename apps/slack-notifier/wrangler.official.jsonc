@@ -1,0 +1,21 @@
+{
+  // bridge★ 公式LINE: 画像・ファイル・スタンプなど文章以外の受信を Googleチャット「ブリッジスター公式LINE通知」へ送る。
+  // 文章の受信は threestars-cs が同じスペースへ送っている（キーワード自動返信の有無つき）ため、ここでは扱わない。
+  "name": "line-harness-bridge-official-notify",
+  "main": "worker.mjs",
+  "account_id": "2ee300693283c4ea8c636711c8ab0dd1",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {"enabled": true},
+  "vars": {
+    "LINE_ACCOUNT_ID": "8c6b6352-d0ea-4cb4-ae60-b1a5a27bb1b2",
+    "ACCOUNT_LABEL": "bridge★ 公式LINE",
+    "CHAT_URL": "https://line-harness-admin-4e0033e1.pages.dev/chats",
+    "OUTBOX_TABLE": "bridge_official_deliveries",
+    "ONLY_NON_TEXT": "1",
+    "START_AFTER": "2026-11-17T20:45:00"
+  },
+  "d1_databases": [{"binding":"DB","database_name":"line-harness-db","database_id":"a39bed16-a248-4b16-8f46-c898f5ceafbe"}],
+  "triggers": {"crons":["* * * * *"]}
+}

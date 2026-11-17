@@ -111,3 +111,21 @@ test('a Slack card queued before the move is sent as the same content in text',(
  assert.match(body.text,/<https:\/\/example\.com\/chats\?friend=f1\|個別チャットで返信する>$/);
  assert.equal(chatBody('{"text":"x"}'),'{"text":"x"}');
 });
+test('a second account uses its own outbox, skips text, and starts from START_AFTER',async()=>{
+ const DB=db();
+ DB.sql.exec("INSERT INTO friends VALUES('f1','みうらゆうき','official')");
+ const insert=DB.sql.prepare('INSERT INTO messages_log VALUES(?,?,?,?,?,?,?)');
+ insert.run('old-image','f1','incoming','image','{}','2026-11-17T20:00:00.000+09:00','official');
+ insert.run('new-text','f1','incoming','text','文章は別経路','2026-11-17T22:00:00.000+09:00','official');
+ insert.run('new-image','f1','incoming','image','{}','2026-11-17T22:01:00.000+09:00','official');
+ insert.run('new-file','f1','incoming','file','{"fileName":"成績表.pdf"}','2026-11-17T22:02:00.000',null);
+ const env={...envConfig,DB,LINE_ACCOUNT_ID:'official',ACCOUNT_LABEL:'公式LINE',OUTBOX_TABLE:'bridge_official_deliveries',ONLY_NON_TEXT:'1',START_AFTER:'2026-11-17T21:00:00'};
+ assert.equal(await reconcile(env),2);
+ const sent=[];
+ assert.equal(await flush(env,async(_u,opt)=>{sent.push(JSON.parse(opt.body).text);return accepted()},async()=>{}),2);
+ assert.match(sent[0],/公式LINEに新着メッセージ/);assert.match(sent[0],/画像/);assert.match(sent[1],/成績表.pdf/);
+ assert.equal(await reconcile(env),0);
+ assert.equal(DB.sql.prepare('SELECT count(*) n FROM bridge_official_deliveries').get().n,2);
+ assert.equal(DB.sql.prepare('SELECT count(*) n FROM bridge_slack_deliveries').get().n,0);
+ await assert.rejects(reconcile({...env,OUTBOX_TABLE:'x; DROP TABLE friends'}),/Invalid outbox table/);
+});

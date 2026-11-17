@@ -82,3 +82,21 @@ Slack Webの指定チャンネルで送信者・受信日時・復旧注記・�
 本番バージョン: `b6b94ebc-bc6a-49e2-9546-c2289c9e976c`
 LINE APIでもWebhookは `https://line-harness.miura0224.workers.dev/webhook`、active=trueを確認。
 その次のcron実行も queued=0 / sent=0 / failed=0 で成功し、過去分の重複送信なしを確認。
+
+## bridge★ 公式LINE（文章以外の受信）
+
+2026-11-17 追加。同じ `worker.mjs` を別名 `line-harness-bridge-official-notify`（設定は
+`wrangler.official.jsonc`）でも動かし、bridge★ 公式LINE（`8c6b6352-d0ea-4cb4-ae60-b1a5a27bb1b2`）の
+画像・ファイル・スタンプなど文章以外の受信を、Googleチャット「ブリッジスター公式LINE通知」
+（https://chat.google.com/app/chat/AAQAUxGgqWw 、着信Webhook名「公式LINE通知」）へ送る。
+
+- 文章の受信は `threestars-cs` が同じスペースへ送っている（キーワード自動返信の有無つき）。
+  二重にならないよう、こちらは `ONLY_NON_TEXT=1` で文章を扱わない。
+- 台帳は `bridge_official_deliveries`（`OUTBOX_TABLE`）。塾生LINEの台帳とは別。初回実行時に自動で作る。
+- `START_AFTER` より前の受信は通知しない（導入前の履歴を流さないため）。
+- 送信Webhookは使わず、毎分のcronだけで拾う（通知は最大1分ほど遅れる）。
+- Secret: `GOOGLE_CHAT_WEBHOOK_URL`
+
+```sh
+node_modules/.bin/wrangler deploy --config apps/slack-notifier/wrangler.official.jsonc
+```

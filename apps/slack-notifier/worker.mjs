@@ -31,6 +31,19 @@ export function chatBody(stored) {
   }
   return JSON.stringify({text:lines.join('\n').slice(0,4000)});
 }
+// Each account keeps its own outbox table; the name comes from configuration, never from a request.
+export function table(env) {
+  const name=env.OUTBOX_TABLE||'bridge_slack_deliveries';
+  if(!/^[a-z_]{1,40}$/.test(name)) throw Error('Invalid outbox table');
+  return name;
+}
+const ready=new Set();
+async function ensureTable(env) {
+  const name=table(env);
+  if(ready.has(name)) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS "+name+" (event_key TEXT PRIMARY KEY,payload TEXT,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)").run();
+  ready.add(name);
+}
 export async function verifySignature(raw, signature, secret) {
   if(!secret || !/^[a-f0-9]{64}$/i.test(signature || '')) return false;
   const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['verify']);
@@ -38,17 +51,17 @@ export async function verifySignature(raw, signature, secret) {
 }
 export async function deliver(env, key, post=fetch) {
   const now=Date.now();
-  const job=await env.DB.prepare("UPDATE bridge_slack_deliveries SET status='sending',attempts=attempts+1,next_attempt=?,updated_at=? WHERE event_key=? AND status IN ('pending','sending') AND next_attempt<=? RETURNING *").bind(now+120000,now,key,now).first();
+  const job=await env.DB.prepare("UPDATE "+table(env)+" SET status='sending',attempts=attempts+1,next_attempt=?,updated_at=? WHERE event_key=? AND status IN ('pending','sending') AND next_attempt<=? RETURNING *").bind(now+120000,now,key,now).first();
   if(!job) return {skipped:'already-claimed'};
   try {
     const target=new URL(env.GOOGLE_CHAT_WEBHOOK_URL);
     if(target.protocol!=='https:' || target.hostname!=='chat.googleapis.com' || !/^\/v1\/spaces\/[^/]+\/messages$/.test(target.pathname)) throw Error('Invalid destination');
     const res=await post(target.href,{method:'POST',headers:{'content-type':'application/json; charset=UTF-8'},body:chatBody(job.payload),signal:AbortSignal.timeout(10000)});
     if(!res.ok || !(await res.json().catch(()=>null))?.name) throw Error('Google Chat rejected delivery');
-    await env.DB.prepare("UPDATE bridge_slack_deliveries SET status='sent',payload=NULL,updated_at=? WHERE event_key=?").bind(Date.now(),key).run();
+    await env.DB.prepare("UPDATE "+table(env)+" SET status='sent',payload=NULL,updated_at=? WHERE event_key=?").bind(Date.now(),key).run();
     return {sent:true};
   } catch {
-    await env.DB.prepare("UPDATE bridge_slack_deliveries SET status=?,next_attempt=?,updated_at=? WHERE event_key=?").bind('pending',Date.now()+Math.min(3600000,60000*2**Math.min(job.attempts,6)),Date.now(),key).run();
+    await env.DB.prepare("UPDATE "+table(env)+" SET status=?,next_attempt=?,updated_at=? WHERE event_key=?").bind('pending',Date.now()+Math.min(3600000,60000*2**Math.min(job.attempts,6)),Date.now(),key).run();
     console.error(JSON.stringify({event:'chat_delivery_failed',key,attempt:job.attempts}));
     return {queued:true};
   }
@@ -72,20 +85,25 @@ export function messagePayload(row, env) {
 export async function reconcile(env) {
   // Keep message-ID receipts permanently: pruning would replay old messages.
   // Explicit message ownership wins; legacy incoming records have only friend ownership.
+  await ensureTable(env);
+  // ONLY_NON_TEXT: text is already notified elsewhere, so only attachments, stickers etc. are picked up.
+  // START_AFTER: a newly added account starts from this time instead of replaying its whole history.
   const rows=await env.DB.prepare(`SELECT m.id,m.friend_id,m.message_type,m.content,m.created_at,f.display_name
     FROM messages_log m JOIN friends f ON f.id=m.friend_id
     WHERE m.direction='incoming' AND f.line_account_id=?
       AND (m.line_account_id IS NULL OR m.line_account_id=?)
-      AND NOT EXISTS (SELECT 1 FROM bridge_slack_deliveries d WHERE d.event_key='message:'||m.id)
-    ORDER BY m.created_at,m.id LIMIT 100`).bind(env.LINE_ACCOUNT_ID,env.LINE_ACCOUNT_ID).all();
+      ${env.ONLY_NON_TEXT==='1' ? "AND m.message_type!='text'" : ''}
+      AND m.created_at>=?
+      AND NOT EXISTS (SELECT 1 FROM ${table(env)} d WHERE d.event_key='message:'||m.id)
+    ORDER BY m.created_at,m.id LIMIT 100`).bind(env.LINE_ACCOUNT_ID,env.LINE_ACCOUNT_ID,env.START_AFTER||'').all();
   for (const row of rows.results) {
-    await env.DB.prepare("INSERT OR IGNORE INTO bridge_slack_deliveries(event_key,payload,updated_at) VALUES (?,?,?)")
+    await env.DB.prepare("INSERT OR IGNORE INTO "+table(env)+"(event_key,payload,updated_at) VALUES (?,?,?)")
       .bind('message:'+row.id,JSON.stringify(chatMessage(messagePayload(row,env),row,env)),Date.now()).run();
   }
   return rows.results.length;
 }
 export async function flush(env, post=fetch, pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
-  const jobs=await env.DB.prepare("SELECT event_key FROM bridge_slack_deliveries WHERE status IN ('pending','sending') AND next_attempt<=? ORDER BY updated_at,rowid LIMIT 30").bind(Date.now()).all();
+  const jobs=await env.DB.prepare("SELECT event_key FROM "+table(env)+" WHERE status IN ('pending','sending') AND next_attempt<=? ORDER BY updated_at,rowid LIMIT 30").bind(Date.now()).all();
   let sent=0;
   for(const job of jobs.results) {
     const result=await deliver(env,job.event_key,post);
@@ -116,7 +134,7 @@ export default {
     ctx.waitUntil((async()=>{
       const queued=await reconcile(env);
       const sent=await flush(env);
-      const failed=await env.DB.prepare("SELECT count(*) AS n FROM bridge_slack_deliveries WHERE status='failed'").first();
+      const failed=await env.DB.prepare("SELECT count(*) AS n FROM "+table(env)+" WHERE status='failed'").first();
       console.log(JSON.stringify({event:'bridge_chat_reconciliation',queued,sent,failed:failed.n}));
     })());
   }
