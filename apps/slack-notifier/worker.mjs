@@ -1,22 +1,35 @@
 // Adapted from threestars-cs/src/line-inquiry-slack.mjs.
-// Database reconciliation -> durable message-ID outbox -> Slack card.
+// Database reconciliation -> durable message-ID outbox -> Google Chat message.
+// The outbox table keeps its original name (bridge_slack_deliveries): its sent keys are what
+// prevent old messages from being posted again.
 // Signed events are wake-up hints; cron also discovers messages without events.
-export function slackCard(payload, friend, env) {
-  const name = String(friend.display_name || '名前未取得').slice(0, 200);
+// User-supplied text never becomes a mention or link: angle brackets are widened.
+const plain=value=>String(value).replace(/</g,'＜').replace(/>/g,'＞');
+export function chatMessage(payload, friend, env) {
+  const name = plain(String(friend.display_name || '名前未取得').slice(0, 200));
   const text = String(payload.data.eventData.text);
   const time = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(payload.timestamp) ? payload.timestamp : payload.timestamp+'+09:00');
   const received = Number.isNaN(time.valueOf()) ? '未取得' : time.toLocaleString('ja-JP', {timeZone:'Asia/Tokyo',hour12:false});
-  const blocks = [
-    {type:'header',text:{type:'plain_text',text:'📩 '+env.ACCOUNT_LABEL+'に新着メッセージ',emoji:true}},
-    {type:'section',text:{type:'plain_text',text:'送信者：'+name+'\n受信日時：'+received,emoji:false}},
-  ];
-  for(let i=0;i<Math.min(text.length,10000);i+=2500) blocks.push({type:'section',text:{type:'plain_text',text:text.slice(i,i+2500),emoji:false}});
-  if(text.length>10000) blocks.push({type:'context',elements:[{type:'plain_text',text:'続きは個別チャットで確認できます。'}]});
-  if (payload.backfill) blocks.push({type:'context',elements:[{type:'plain_text',text:'通知復旧に伴う過去の未通知分です。上記は元の受信日時です。'}]});
   const url = new URL(env.CHAT_URL);
   url.searchParams.set('friend',payload.data.friendId);
-  blocks.push({type:'actions',elements:[{type:'button',action_id:'open_harness_chat',text:{type:'plain_text',text:'個別チャットで返信する'},url:url.href,style:'primary'}]});
-  return {username:env.ACCOUNT_LABEL+'通知',icon_emoji:':speech_balloon:',text:env.ACCOUNT_LABEL+'に新着メッセージ',blocks,unfurl_links:false,unfurl_media:false};
+  const lines = ['📩 *'+env.ACCOUNT_LABEL+'に新着メッセージ*','送信者：'+name,'受信日時：'+received,'',plain(text.slice(0,3000))];
+  if(text.length>3000) lines.push('（続きは個別チャットで確認できます）');
+  if (payload.backfill) lines.push('','通知復旧に伴う過去の未通知分です。上記は元の受信日時です。');
+  lines.push('','<'+url.href+'|個別チャットで返信する>');
+  return {text:lines.join('\n')};
+}
+// Rows queued before the move to Google Chat hold a Slack card; send the same content as text.
+export function chatBody(stored) {
+  let card;try{card=JSON.parse(stored);}catch{return stored;}
+  if(!Array.isArray(card?.blocks)) return stored;
+  const lines=[];
+  for(const block of card.blocks){
+    if(block.type==='header') lines.push('📩 *'+String(block.text.text).replace(/^📩\s*/,'')+'*');
+    else if(block.type==='section') lines.push(plain(block.text.text));
+    else if(block.type==='context') lines.push('',...block.elements.map(x=>plain(x.text)));
+    else if(block.type==='actions') lines.push('','<'+block.elements[0].url+'|個別チャットで返信する>');
+  }
+  return JSON.stringify({text:lines.join('\n').slice(0,4000)});
 }
 export async function verifySignature(raw, signature, secret) {
   if(!secret || !/^[a-f0-9]{64}$/i.test(signature || '')) return false;
@@ -28,15 +41,15 @@ export async function deliver(env, key, post=fetch) {
   const job=await env.DB.prepare("UPDATE bridge_slack_deliveries SET status='sending',attempts=attempts+1,next_attempt=?,updated_at=? WHERE event_key=? AND status IN ('pending','sending') AND next_attempt<=? RETURNING *").bind(now+120000,now,key,now).first();
   if(!job) return {skipped:'already-claimed'};
   try {
-    const target=new URL(env.SLACK_WEBHOOK_URL);
-    if(target.protocol!=='https:' || target.hostname!=='hooks.slack.com' || !target.pathname.startsWith('/services/')) throw Error('Invalid destination');
-    const res=await post(target.href,{method:'POST',headers:{'content-type':'application/json'},body:job.payload,signal:AbortSignal.timeout(10000)});
-    if(!res.ok || (await res.text()).trim()!=='ok') throw Error('Slack rejected delivery');
+    const target=new URL(env.GOOGLE_CHAT_WEBHOOK_URL);
+    if(target.protocol!=='https:' || target.hostname!=='chat.googleapis.com' || !/^\/v1\/spaces\/[^/]+\/messages$/.test(target.pathname)) throw Error('Invalid destination');
+    const res=await post(target.href,{method:'POST',headers:{'content-type':'application/json; charset=UTF-8'},body:chatBody(job.payload),signal:AbortSignal.timeout(10000)});
+    if(!res.ok || !(await res.json().catch(()=>null))?.name) throw Error('Google Chat rejected delivery');
     await env.DB.prepare("UPDATE bridge_slack_deliveries SET status='sent',payload=NULL,updated_at=? WHERE event_key=?").bind(Date.now(),key).run();
     return {sent:true};
   } catch {
     await env.DB.prepare("UPDATE bridge_slack_deliveries SET status=?,next_attempt=?,updated_at=? WHERE event_key=?").bind('pending',Date.now()+Math.min(3600000,60000*2**Math.min(job.attempts,6)),Date.now(),key).run();
-    console.error(JSON.stringify({event:'slack_delivery_failed',key,attempt:job.attempts}));
+    console.error(JSON.stringify({event:'chat_delivery_failed',key,attempt:job.attempts}));
     return {queued:true};
   }
 }
@@ -67,7 +80,7 @@ export async function reconcile(env) {
     ORDER BY m.created_at,m.id LIMIT 100`).bind(env.LINE_ACCOUNT_ID,env.LINE_ACCOUNT_ID).all();
   for (const row of rows.results) {
     await env.DB.prepare("INSERT OR IGNORE INTO bridge_slack_deliveries(event_key,payload,updated_at) VALUES (?,?,?)")
-      .bind('message:'+row.id,JSON.stringify(slackCard(messagePayload(row,env),row,env)),Date.now()).run();
+      .bind('message:'+row.id,JSON.stringify(chatMessage(messagePayload(row,env),row,env)),Date.now()).run();
   }
   return rows.results.length;
 }
@@ -77,7 +90,7 @@ export async function flush(env, post=fetch, pause=ms=>new Promise(resolve=>setT
   for(const job of jobs.results) {
     const result=await deliver(env,job.event_key,post);
     if(result.sent) sent++;
-    // One shared channel; leave room for Slack's per-channel rate limit.
+    // One shared space; Google Chat allows about one webhook message per second per space.
     await pause(1100);
   }
   return sent;
@@ -104,7 +117,7 @@ export default {
       const queued=await reconcile(env);
       const sent=await flush(env);
       const failed=await env.DB.prepare("SELECT count(*) AS n FROM bridge_slack_deliveries WHERE status='failed'").first();
-      console.log(JSON.stringify({event:'bridge_slack_reconciliation',queued,sent,failed:failed.n}));
+      console.log(JSON.stringify({event:'bridge_chat_reconciliation',queued,sent,failed:failed.n}));
     })());
   }
 };
